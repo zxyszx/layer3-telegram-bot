@@ -43,8 +43,29 @@ export class Layer3Browser {
   async ensureReady(targetUrl = this.config.instancesUrl) {
     if (!this.context) await this.init();
     await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-    await this.page.waitForTimeout(1800);
-    await this.tryAutomaticLogin();
+    await this.waitForPortalReady();
+
+    const initialUrl = this.page.url();
+    const initialBody = await this.page.locator('body').innerText().catch(() => '');
+    if (/login|sign-?in/i.test(initialUrl) || /sign in|log in|login/i.test(initialBody.slice(0, 500))) {
+      await this.page.locator('input[type="password"]').first()
+        .waitFor({ state: 'visible', timeout: 30_000 })
+        .catch(() => {});
+    }
+    const loggedIn = await this.tryAutomaticLogin();
+
+    if (loggedIn) {
+      await this.page.waitForFunction(
+        () => !document.querySelector('input[type="password"]'),
+        null,
+        { timeout: 30_000 },
+      ).catch(() => {});
+
+      if (new URL(this.page.url()).pathname !== new URL(targetUrl).pathname) {
+        await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+      }
+      await this.waitForPortalReady();
+    }
 
     const currentUrl = this.page.url();
     const body = await this.page.locator('body').innerText().catch(() => '');
@@ -53,20 +74,34 @@ export class Layer3Browser {
     }
   }
 
+  async waitForPortalReady() {
+    await this.page.waitForFunction(
+      (instanceName) => {
+        const body = document.body?.innerText || '';
+        return Boolean(document.querySelector('input[type="password"]'))
+          || body.includes(instanceName)
+          || /Infra Credits/i.test(body)
+          || /sign in|log in|login/i.test(body.slice(0, 500));
+      },
+      this.config.instanceName,
+      { timeout: 45_000 },
+    ).catch(() => {});
+  }
+
   async tryAutomaticLogin() {
     const password = this.page.locator('input[type="password"]').first();
-    if (!await password.isVisible().catch(() => false)) return;
-    if (!this.config.email || !this.config.password) return;
+    if (!await password.isVisible().catch(() => false)) return false;
+    if (!this.config.email || !this.config.password) return false;
 
     const email = this.page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first();
-    if (!await email.isVisible().catch(() => false)) return;
+    if (!await email.isVisible().catch(() => false)) return false;
 
     this.logger.info('Refreshing Layer3 login session');
     await email.fill(this.config.email);
     await password.fill(this.config.password);
     const submit = this.page.getByRole('button', { name: /sign in|log in|login/i }).first();
     await submit.click();
-    await this.page.waitForTimeout(2200);
+    return true;
   }
 
   async readBalance() {
@@ -79,8 +114,13 @@ export class Layer3Browser {
 
   async openInstance() {
     await this.ensureReady(this.config.instanceUrl);
-    const instance = this.page.getByText(this.config.instanceName, { exact: true }).first();
-    if (!await instance.isVisible().catch(() => false)) {
+    await this.page.waitForFunction(
+      (instanceName) => (document.body?.innerText || '').includes(instanceName),
+      this.config.instanceName,
+      { timeout: 45_000 },
+    ).catch(() => {});
+    const body = await this.page.locator('body').innerText().catch(() => '');
+    if (!body.includes(this.config.instanceName)) {
       throw new Error(`Instance not found: ${this.config.instanceName}`);
     }
   }

@@ -70,6 +70,8 @@ chmod 700 "${PROJECT_DIR}/data"
 
 cd "${PROJECT_DIR}"
 docker compose build
+docker compose run --rm --user root --entrypoint sh bot -c \
+  'chown -R pwuser:pwuser /app/data && chmod 700 /app/data'
 docker compose up -d
 
 echo
