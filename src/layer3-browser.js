@@ -9,6 +9,15 @@ const STATUS_PATTERNS = [
   ['SUSPENDED', /\b(suspended|paused|shelved)\b/i],
 ];
 
+const POWER_ACTION_PATTERNS = {
+  start: /^(Power On|Start|Run)$/i,
+  stop: /^(Power Off|Shut down|Shutdown|Stop)$/i,
+};
+
+export function isExpectedPowerAction(kind, label) {
+  return Boolean(POWER_ACTION_PATTERNS[kind]?.test(label.trim()));
+}
+
 export class LoginRequiredError extends Error {}
 
 export class Layer3Browser {
@@ -151,28 +160,42 @@ export class Layer3Browser {
     });
   }
 
-  async clickPowerControl(kind) {
+  async findPowerControl(kind) {
     const status = this.page.getByText(/^Status:/i).first();
     if (!await status.isVisible().catch(() => false)) {
       throw new Error('Could not locate the Layer3 power control area');
     }
 
-    const actionPanel = status.locator('xpath=../..');
-    const powerControl = actionPanel.locator('button').nth(3);
-    if (!await powerControl.isVisible().catch(() => false)) {
-      throw new Error('Could not locate the Layer3 power button');
+    const observedLabels = new Set();
+    for (const depth of [2, 3, 4]) {
+      const ancestor = Array.from({ length: depth }, () => '..').join('/');
+      const buttons = status.locator(`xpath=${ancestor}`).locator('button');
+      const count = Math.min(await buttons.count(), 30);
+
+      for (let index = 0; index < count; index += 1) {
+        const candidate = buttons.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+
+        await candidate.hover().catch(() => {});
+        await this.page.waitForTimeout(250);
+        const labels = await this.page.locator('[role="tooltip"]:visible').allInnerTexts().catch(() => []);
+        const label = labels.at(-1)?.trim() || '';
+        if (label) observedLabels.add(label);
+        if (isExpectedPowerAction(kind, label)) {
+          return { control: candidate, label };
+        }
+      }
     }
 
-    await powerControl.hover();
-    await this.page.waitForTimeout(250);
-    const tooltip = this.page.getByRole('tooltip').last();
-    const label = await tooltip.innerText().catch(() => '');
-    const expected = kind === 'start' ? /power on|start|run/i : /power off|shut down|shutdown|stop/i;
-    if (!expected.test(label)) {
-      throw new Error(`Unexpected Layer3 power action: ${label || 'unlabelled button'}`);
-    }
+    const expected = kind === 'start' ? 'Power On' : 'Power Off';
+    const observed = [...observedLabels].join(', ') || 'none';
+    throw new Error(`Could not locate the Layer3 ${expected} control (seen: ${observed})`);
+  }
 
-    await powerControl.click();
+  async clickPowerControl(kind) {
+    const { control, label } = await this.findPowerControl(kind);
+    this.logger.info('Layer3 power control located', { kind, label });
+    await control.click();
     await this.page.waitForTimeout(350);
     const dialog = this.page.getByRole('dialog').last();
     if (await dialog.isVisible().catch(() => false)) {
