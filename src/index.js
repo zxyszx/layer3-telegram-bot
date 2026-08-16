@@ -4,7 +4,12 @@ import { JsonStateStore } from './state-store.js';
 import { Layer3Browser } from './layer3-browser.js';
 import { AutoStopScheduler } from './auto-stop.js';
 import { formatStatusReport } from './estimate.js';
-import { TelegramBot, confirmKeyboard, mainKeyboard } from './telegram.js';
+import {
+  TelegramBot,
+  confirmKeyboard,
+  mainKeyboard,
+  statusKeyboard,
+} from './telegram.js';
 
 const config = loadConfig();
 const logger = createLogger(config.logLevel);
@@ -21,7 +26,11 @@ const scheduler = new AutoStopScheduler(
 
 async function sendStatus(chatId) {
   const [status, autoStopAt] = await Promise.all([layer3.status(), scheduler.dueAt()]);
-  await telegram.send(chatId, formatStatusReport(status, config, autoStopAt), mainKeyboard);
+  await telegram.send(
+    chatId,
+    formatStatusReport(status, config, autoStopAt),
+    statusKeyboard(status.instanceStatus),
+  );
 }
 
 async function handleUpdate(update) {
@@ -68,17 +77,17 @@ async function handleUpdate(update) {
     await telegram.send(chatId, '正在启动机器，请稍候...');
     const result = await layer3.start();
     await scheduler.cancel();
-    await telegram.send(chatId, `${result.changed ? '机器已启动' : '机器已经在运行'}，当前没有自动关机任务。`, mainKeyboard);
+    await telegram.send(chatId, `${result.changed ? '机器已启动' : '机器已经在运行'}，当前没有自动关机任务。`, statusKeyboard(result.status));
   } else if (action === 'start1h_confirm') {
     await telegram.send(chatId, '正在启动机器，请稍候...');
     const result = await layer3.start();
     const dueAt = await scheduler.schedule(config.autoStopMinutes);
-    await telegram.send(chatId, `${result.changed ? '机器已启动' : '机器已经在运行'}。\n计划关机时间：${new Date(dueAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`, mainKeyboard);
+    await telegram.send(chatId, `${result.changed ? '机器已启动' : '机器已经在运行'}。\n计划关机时间：${new Date(dueAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`, statusKeyboard(result.status));
   } else if (action === 'stop_confirm') {
     await telegram.send(chatId, '正在执行控制台 Power Off，请稍候...');
     const result = await layer3.stop();
     await scheduler.cancel();
-    await telegram.send(chatId, result.changed ? '机器已关机。' : '机器原本就是关机状态。', mainKeyboard);
+    await telegram.send(chatId, result.changed ? '机器已关机。' : '机器原本就是关机状态。', statusKeyboard(result.status));
   } else if (action === 'cancel') {
     await telegram.send(chatId, '操作已取消。', mainKeyboard);
   }
