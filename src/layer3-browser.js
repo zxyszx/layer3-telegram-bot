@@ -18,6 +18,12 @@ export function isExpectedPowerAction(kind, label) {
   return Boolean(POWER_ACTION_PATTERNS[kind]?.test(label.trim()));
 }
 
+export function expectedPowerControlForStatus(status) {
+  if (status === 'RUNNING') return 'stop';
+  if (status === 'STOPPED') return 'start';
+  return null;
+}
+
 export class LoginRequiredError extends Error {}
 
 export class Layer3Browser {
@@ -113,12 +119,16 @@ export class Layer3Browser {
     return true;
   }
 
-  async readBalance() {
+  async readBalanceText() {
     const text = await this.page.locator('body').innerText();
     const match = text.match(/Infra Credits[\s\S]{0,120}?NGN\s*([\d,.]+)/i)
       || text.match(/NGN\s*([\d,.]+)[\s\S]{0,80}?Infra Credits/i);
     if (!match) throw new Error('Could not read Infra Credits balance from Layer3 console');
-    return Number(match[1].replaceAll(',', ''));
+    return match[1].replaceAll(',', '');
+  }
+
+  async readBalance() {
+    return Number(await this.readBalanceText());
   }
 
   async openInstance() {
@@ -153,10 +163,19 @@ export class Layer3Browser {
   async status() {
     return this.serial(async () => {
       await this.openInstance();
+      const balanceText = await this.readBalanceText();
       return {
-        balance: await this.readBalance(),
+        balance: Number(balanceText),
+        balanceText,
         instanceStatus: await this.readInstanceStatus(),
       };
+    });
+  }
+
+  async balanceText() {
+    return this.serial(async () => {
+      await this.openInstance();
+      return this.readBalanceText();
     });
   }
 
@@ -209,20 +228,44 @@ export class Layer3Browser {
   async waitForStatus(expected, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     let last = 'UNKNOWN';
+    let confirmations = 0;
     while (Date.now() < deadline) {
       await this.page.waitForTimeout(3000);
       await this.ensureReady(this.config.instanceUrl);
       last = await this.readInstanceStatus();
-      if (last === expected) return last;
+      const expectedPowerKind = expectedPowerControlForStatus(expected);
+      if (last !== expected || !expectedPowerKind) {
+        confirmations = 0;
+        continue;
+      }
+
+      try {
+        const { label } = await this.findPowerControl(expectedPowerKind);
+        confirmations += 1;
+        this.logger.info('Layer3 status verification passed', {
+          status: last,
+          powerControl: label,
+          confirmation: confirmations,
+        });
+        if (confirmations >= 2) return last;
+      } catch (error) {
+        confirmations = 0;
+        this.logger.warn('Layer3 status verification disagreed', {
+          status: last,
+          error: error.message,
+        });
+      }
     }
-    throw new Error(`Timed out waiting for ${expected}; last status was ${last}`);
+    throw new Error(`Timed out waiting for verified ${expected}; last status was ${last}`);
   }
 
   async start() {
     return this.serial(async () => {
       await this.openInstance();
       const current = await this.readInstanceStatus();
-      if (current === 'RUNNING') return { changed: false, status: current };
+      if (current === 'RUNNING') {
+        return { changed: false, status: await this.waitForStatus('RUNNING', 60_000) };
+      }
       await this.clickPowerControl('start');
       return { changed: true, status: await this.waitForStatus('RUNNING', 3 * 60_000) };
     });
@@ -232,7 +275,9 @@ export class Layer3Browser {
     return this.serial(async () => {
       await this.openInstance();
       const current = await this.readInstanceStatus();
-      if (current === 'STOPPED') return { changed: false, status: current };
+      if (current === 'STOPPED') {
+        return { changed: false, status: await this.waitForStatus('STOPPED', 60_000) };
+      }
       await this.clickPowerControl('stop');
       return { changed: true, status: await this.waitForStatus('STOPPED', 11 * 60_000) };
     });

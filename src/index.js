@@ -5,12 +5,23 @@ import { Layer3Browser } from './layer3-browser.js';
 import { AutoStopScheduler } from './auto-stop.js';
 import { TelegramBot, mainKeyboard } from './telegram.js';
 import { createUpdateHandler } from './update-handler.js';
+import { BillingTracker } from './billing.js';
+import { createBillingAwareLayer3 } from './lifecycle.js';
 
 const config = loadConfig();
 const logger = createLogger(config.logLevel);
 const telegramOffsetStore = new JsonStateStore(config.telegramStatePath);
 const telegram = new TelegramBot(config.telegramToken, config.allowedChatIds, logger, telegramOffsetStore);
-const layer3 = new Layer3Browser(config, logger);
+const rawLayer3 = new Layer3Browser(config, logger);
+const billingStore = new JsonStateStore(config.billingHistoryPath);
+const billing = new BillingTracker({
+  config,
+  layer3: rawLayer3,
+  store: billingStore,
+  notify: (message) => telegram.broadcast(message),
+  logger,
+});
+const layer3 = createBillingAwareLayer3(rawLayer3, billing, logger);
 const store = new JsonStateStore(config.runtimeStatePath);
 const scheduler = new AutoStopScheduler(
   store,
@@ -19,7 +30,7 @@ const scheduler = new AutoStopScheduler(
   logger,
 );
 
-const handleUpdate = createUpdateHandler({ config, logger, telegram, layer3, scheduler });
+const handleUpdate = createUpdateHandler({ config, logger, telegram, layer3, scheduler, billing });
 
 telegram.setHandler(async (update) => {
   try {
@@ -36,14 +47,16 @@ telegram.setHandler(async (update) => {
 async function shutdown(signal) {
   logger.info('Shutting down', { signal });
   telegram.stop();
-  await layer3.close();
+  await billing.close();
+  await rawLayer3.close();
   process.exit(0);
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-await layer3.init();
+await rawLayer3.init();
+await billing.restore();
 await scheduler.restore();
 logger.info('Bot started');
 await telegram.start();

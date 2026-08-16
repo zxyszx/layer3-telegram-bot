@@ -10,8 +10,12 @@
 - `/startvm`：二次确认后持续启动机器，并取消旧的自动关机任务
 - `/start1h`：二次确认后启动机器，并在 1 小时后自动关机
 - `/stopvm`：二次确认后立即安全关机
+- `/cost`：查看最近一次完整费用验收
+- `/costs`：查看最近 5 次费用验收及有效平均小时成本
 - 白名单限制可操作的 Telegram Chat ID
 - 自动关机状态持久化，机器人重启后继续执行
+- 费用验收状态持久化，关机后 5 分钟复查余额并保留最近 100 次记录
+- 开关机完成使用“状态文字 + 相反电源按钮”连续两次确认，避免单一页面信号误报
 - 重用本地浏览器登录会话；会话过期时可选择人工重新登录或使用环境变量刷新登录
 
 ## 重要限制
@@ -45,6 +49,8 @@ TELEGRAM_ALLOWED_CHAT_IDS=你的ChatID
 LAYER3_PROJECT_SLUG=default-828
 LAYER3_INSTANCE_NAME=vm-f9k5yf10c
 INSTANCE_HOURLY_NGN=22.37702
+AUTO_SHUTDOWN_SECONDS=3600
+POST_SHUTDOWN_BILLING_CHECK_SECONDS=300
 ```
 
 多个 Chat ID 使用逗号分隔。`INSTANCE_HOURLY_NGN` 应填写控制台当前完整小时总价；价格变化后需要同步更新，否则“剩余时间”估算会不准确。
@@ -114,9 +120,9 @@ npm start
 - 只允许自己的 Telegram Chat ID。
 - 为部署服务器配置防火墙和自动安全更新。
 - 不要把 Bot Token、Layer3 密码或 `data/browser-profile` 放入代码仓库。
-- 首次验证时把 `AUTO_STOP_MINUTES` 暂设为 `5`，确认关机和状态检查正常后再改为 `60`。
+- 正式配置保持 `AUTO_SHUTDOWN_SECONDS=3600`，关机后费用复查保持 `POST_SHUTDOWN_BILLING_CHECK_SECONDS=300`。旧的 `AUTO_STOP_MINUTES` 仍兼容。
 - 每次自动关机失败，机器人会发送报警；收到报警后应立即进入 Layer3 控制台处理。
-- 当前实现不会自动强制断电，避免文件系统损坏。
+- 自动关机会调用 Layer3 控制台 `Power Off`，它可能属于强制断电；到期前必须保存数据并正常停止应用。
 
 ## 费用估算
 
@@ -125,3 +131,9 @@ npm start
 `Infra Credits / INSTANCE_HOURLY_NGN`
 
 这只是参考值，不包含未来价格变化、独立磁盘/IP费用、流量、备份和其他附加项。真实费用始终以 Layer3 账单为准。
+
+## 费用验收
+
+每次确认启动后，机器人在 `data/billing_history.json` 建立独立 Run ID，记录启动前、关机前、关机成功后和关机复查时的余额。金额使用高精度 Decimal 计算，费用异常不会阻止启动、自动关机或 5 分钟关机重试。
+
+关机确认后，机器人等待 5 分钟再次读取余额并发送完整报告。如果余额暂未变化，只会说明“当前暂未观察到余额变化”，不会把结果描述成最终账单或免费。历史文件最多保留最近 100 次记录。

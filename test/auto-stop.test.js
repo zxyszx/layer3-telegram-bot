@@ -49,3 +49,12 @@ test('retries an auto-stop after a transient failure', async () => {
   assert.match(notifications[0], /自动重试/);
   assert.match(notifications[1], /机器已关机/);
 });
+
+test('restores the original shutdown deadline without resetting it', async () => {
+  const original = new Date(Date.now() + 30_000).toISOString();
+  const store = memoryStore({ autoStopAt: original });
+  const scheduler = new AutoStopScheduler(store, async () => {}, async () => {}, logger);
+  await scheduler.restore();
+  assert.equal(await scheduler.dueAt(), original);
+  await scheduler.cancel();
+});

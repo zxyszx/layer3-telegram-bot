@@ -26,10 +26,16 @@ function createHarness() {
   const scheduler = {
     dueAt: async () => null,
     cancel: async () => calls.push(['cancel-schedule']),
-    schedule: async (minutes) => {
-      calls.push(['schedule', minutes]);
+    scheduleSeconds: async (seconds) => {
+      calls.push(['schedule-seconds', seconds]);
       return '2026-08-16T16:00:00.000Z';
     },
+  };
+  const billing = {
+    activeStatus: async () => '',
+    setScheduledShutdown: async (...args) => calls.push(['billing-schedule', ...args]),
+    latestCostReport: async () => 'latest-cost',
+    recentCostsReport: async () => 'recent-costs',
   };
   const logger = { warn: (...args) => calls.push(['warn', ...args]) };
   const config = {
@@ -37,10 +43,11 @@ function createHarness() {
     hourlyPrice: 22.37702,
     estimatedHoursPerDay: 1,
     autoStopMinutes: 60,
+    autoShutdownSeconds: 3600,
   };
   return {
     calls,
-    handler: createUpdateHandler({ config, logger, telegram, layer3, scheduler }),
+    handler: createUpdateHandler({ config, logger, telegram, layer3, scheduler, billing }),
   };
 }
 
@@ -88,8 +95,22 @@ test('executes start, timed start, stop, cancel and refresh callbacks', async ()
   assert.equal(calls.filter((call) => call[0] === 'layer3-stop').length, 1);
   assert.equal(calls.filter((call) => call[0] === 'layer3-status').length, 1);
   assert.equal(calls.filter((call) => call[0] === 'cancel-schedule').length, 2);
-  assert.deepEqual(calls.find((call) => call[0] === 'schedule'), ['schedule', 60]);
+  assert.deepEqual(calls.find((call) => call[0] === 'schedule-seconds'), ['schedule-seconds', 3600]);
+  assert.deepEqual(calls.find((call) => call[0] === 'billing-schedule' && call[2]), [
+    'billing-schedule',
+    undefined,
+    '2026-08-16T16:00:00.000Z',
+  ]);
   assert.ok(calls.some((call) => call[0] === 'send' && call[2] === '操作已取消。'));
+});
+
+test('serves cost history commands', async () => {
+  const { handler, calls } = createHarness();
+  await handler(message('/cost'));
+  await handler(message('/costs'));
+  const sent = calls.filter((call) => call[0] === 'send');
+  assert.equal(sent[0][2], 'latest-cost');
+  assert.equal(sent[1][2], 'recent-costs');
 });
 
 test('ignores unauthorized chats', async () => {

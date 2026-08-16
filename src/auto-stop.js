@@ -14,7 +14,11 @@ export class AutoStopScheduler {
   }
 
   async schedule(minutes) {
-    const autoStopAt = new Date(Date.now() + minutes * 60_000).toISOString();
+    return this.scheduleSeconds(minutes * 60);
+  }
+
+  async scheduleSeconds(seconds) {
+    const autoStopAt = new Date(Date.now() + seconds * 1000).toISOString();
     await this.arm(autoStopAt, true);
     return autoStopAt;
   }
@@ -46,7 +50,8 @@ export class AutoStopScheduler {
         this.timer = setTimeout(() => this.execute(), this.retryDelayMs);
         this.logger.warn('Auto-stop retry armed', { retryDelayMs: this.retryDelayMs });
       }
-      await this.notify(`自动关机失败：${error.message}\n机器人将在 5 分钟后自动重试，请留意状态。`);
+      const retryMinutes = Math.round(this.retryDelayMs / 60_000);
+      await this.notify(`自动关机失败：${error.message}\n机器人将在 ${retryMinutes} 分钟后自动重试，请留意状态。`);
     }
   }
 

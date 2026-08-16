@@ -34,6 +34,9 @@ export function loadConfig() {
   const password = encodedPassword
     ? Buffer.from(encodedPassword, 'base64').toString('utf8')
     : (process.env.LAYER3_PASSWORD || '');
+  const autoShutdownSeconds = process.env.AUTO_SHUTDOWN_SECONDS?.trim()
+    ? positiveNumber('AUTO_SHUTDOWN_SECONDS', 3600)
+    : positiveNumber('AUTO_STOP_MINUTES', 60) * 60;
   return {
     telegramToken: required('TELEGRAM_BOT_TOKEN'),
     allowedChatIds: parseChatIds(required('TELEGRAM_ALLOWED_CHAT_IDS')),
@@ -44,13 +47,16 @@ export function loadConfig() {
     email: process.env.LAYER3_EMAIL?.trim() || '',
     password,
     hourlyPrice: positiveNumber('INSTANCE_HOURLY_NGN', 22.37702),
-    autoStopMinutes: positiveNumber('AUTO_STOP_MINUTES', 60),
+    autoShutdownSeconds,
+    autoStopMinutes: autoShutdownSeconds / 60,
+    postShutdownBillingCheckSeconds: positiveNumber('POST_SHUTDOWN_BILLING_CHECK_SECONDS', 300),
     estimatedHoursPerDay: positiveNumber('ESTIMATED_HOURS_PER_DAY', 1),
     headless: (process.env.HEADLESS || 'true').toLowerCase() !== 'false',
     dataDir,
     profileDir: path.join(dataDir, 'browser-profile'),
     runtimeStatePath: path.join(dataDir, 'runtime.json'),
     telegramStatePath: path.join(dataDir, 'telegram.json'),
+    billingHistoryPath: path.join(dataDir, 'billing_history.json'),
     logLevel: process.env.LOG_LEVEL || 'info',
   };
 }
