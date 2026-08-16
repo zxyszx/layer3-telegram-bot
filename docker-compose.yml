@@ -1,0 +1,9 @@
+services:
+  bot:
+    image: layer3-telegram-bot:local
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    shm_size: 1gb
