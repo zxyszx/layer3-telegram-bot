@@ -67,6 +67,25 @@ npm run login
 
 ## Docker 部署
 
+私有 GitHub 仓库首次部署：
+
+```bash
+gh auth login
+gh repo clone zxyszx/layer3-telegram-bot
+cd layer3-telegram-bot
+./scripts/setup.sh
+```
+
+服务器已经登录 GitHub 时，可使用一条命令：
+
+```bash
+gh repo clone zxyszx/layer3-telegram-bot && cd layer3-telegram-bot && ./scripts/setup.sh
+```
+
+脚本会交互式询问 Telegram Token、Chat ID、Layer3 邮箱和密码，然后构建并启动 Docker 容器。
+
+手动 Docker 部署：
+
 ```bash
 docker compose build
 docker compose up -d

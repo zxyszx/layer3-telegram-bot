@@ -18,10 +18,18 @@
 服务器需要预先安装 Docker Engine、Docker Compose 插件和 Git：
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/layer3-telegram-bot.git
+gh auth login
+gh repo clone zxyszx/layer3-telegram-bot
 cd layer3-telegram-bot
-chmod +x scripts/*.sh
 ./scripts/setup.sh
+```
+
+仓库是私有的，因此服务器需要先安装并登录 GitHub CLI。完成过 `gh auth login` 后，以后更新不需要重新登录。
+
+已登录 GitHub 的服务器可以直接运行一条命令：
+
+```bash
+gh repo clone zxyszx/layer3-telegram-bot && cd layer3-telegram-bot && ./scripts/setup.sh
 ```
 
 脚本会询问 Telegram Token、Chat ID、Layer3 邮箱和密码，然后构建并启动容器。
