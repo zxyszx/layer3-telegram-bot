@@ -31,6 +31,7 @@ read -r -p "完整小时价格 NGN [22.37702]: " hourly_price
 hourly_price="${hourly_price:-22.37702}"
 read -r -p "自动关机分钟数 [60]: " auto_stop
 auto_stop="${auto_stop:-60}"
+auto_shutdown_seconds="$((auto_stop * 60))"
 
 if [[ -z "${telegram_token}" || -z "${chat_ids}" || -z "${layer3_email}" || -z "${layer3_password}" ]]; then
   echo "Token、Chat ID、邮箱和密码不能为空。" >&2
@@ -53,7 +54,8 @@ LAYER3_PASSWORD=
 LAYER3_PASSWORD_BASE64=${password_base64}
 
 INSTANCE_HOURLY_NGN=${hourly_price}
-AUTO_STOP_MINUTES=${auto_stop}
+AUTO_SHUTDOWN_SECONDS=${auto_shutdown_seconds}
+POST_SHUTDOWN_BILLING_CHECK_SECONDS=300
 ESTIMATED_HOURS_PER_DAY=1
 
 HEADLESS=true
@@ -70,6 +72,8 @@ chmod 700 "${PROJECT_DIR}/data"
 
 cd "${PROJECT_DIR}"
 docker compose build
+docker compose run --rm --user root --entrypoint sh bot -c \
+  'chown -R pwuser:pwuser /app/data && chmod 700 /app/data'
 docker compose up -d
 
 echo

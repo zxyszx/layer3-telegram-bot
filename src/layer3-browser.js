@@ -9,6 +9,21 @@ const STATUS_PATTERNS = [
   ['SUSPENDED', /\b(suspended|paused|shelved)\b/i],
 ];
 
+const POWER_ACTION_PATTERNS = {
+  start: /^(Power On|Start|Run)$/i,
+  stop: /^(Power Off|Shut down|Shutdown|Stop)$/i,
+};
+
+export function isExpectedPowerAction(kind, label) {
+  return Boolean(POWER_ACTION_PATTERNS[kind]?.test(label.trim()));
+}
+
+export function expectedPowerControlForStatus(status) {
+  if (status === 'RUNNING') return 'stop';
+  if (status === 'STOPPED') return 'start';
+  return null;
+}
+
 export class LoginRequiredError extends Error {}
 
 export class Layer3Browser {
@@ -43,8 +58,29 @@ export class Layer3Browser {
   async ensureReady(targetUrl = this.config.instancesUrl) {
     if (!this.context) await this.init();
     await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-    await this.page.waitForTimeout(1800);
-    await this.tryAutomaticLogin();
+    await this.waitForPortalReady();
+
+    const initialUrl = this.page.url();
+    const initialBody = await this.page.locator('body').innerText().catch(() => '');
+    if (/login|sign-?in/i.test(initialUrl) || /sign in|log in|login/i.test(initialBody.slice(0, 500))) {
+      await this.page.locator('input[type="password"]').first()
+        .waitFor({ state: 'visible', timeout: 30_000 })
+        .catch(() => {});
+    }
+    const loggedIn = await this.tryAutomaticLogin();
+
+    if (loggedIn) {
+      await this.page.waitForFunction(
+        () => !document.querySelector('input[type="password"]'),
+        null,
+        { timeout: 30_000 },
+      ).catch(() => {});
+
+      if (new URL(this.page.url()).pathname !== new URL(targetUrl).pathname) {
+        await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+      }
+      await this.waitForPortalReady();
+    }
 
     const currentUrl = this.page.url();
     const body = await this.page.locator('body').innerText().catch(() => '');
@@ -53,34 +89,57 @@ export class Layer3Browser {
     }
   }
 
+  async waitForPortalReady() {
+    await this.page.waitForFunction(
+      (instanceName) => {
+        const body = document.body?.innerText || '';
+        return Boolean(document.querySelector('input[type="password"]'))
+          || body.includes(instanceName)
+          || /Infra Credits/i.test(body)
+          || /sign in|log in|login/i.test(body.slice(0, 500));
+      },
+      this.config.instanceName,
+      { timeout: 45_000 },
+    ).catch(() => {});
+  }
+
   async tryAutomaticLogin() {
     const password = this.page.locator('input[type="password"]').first();
-    if (!await password.isVisible().catch(() => false)) return;
-    if (!this.config.email || !this.config.password) return;
+    if (!await password.isVisible().catch(() => false)) return false;
+    if (!this.config.email || !this.config.password) return false;
 
     const email = this.page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first();
-    if (!await email.isVisible().catch(() => false)) return;
+    if (!await email.isVisible().catch(() => false)) return false;
 
     this.logger.info('Refreshing Layer3 login session');
     await email.fill(this.config.email);
     await password.fill(this.config.password);
     const submit = this.page.getByRole('button', { name: /sign in|log in|login/i }).first();
     await submit.click();
-    await this.page.waitForTimeout(2200);
+    return true;
   }
 
-  async readBalance() {
+  async readBalanceText() {
     const text = await this.page.locator('body').innerText();
     const match = text.match(/Infra Credits[\s\S]{0,120}?NGN\s*([\d,.]+)/i)
       || text.match(/NGN\s*([\d,.]+)[\s\S]{0,80}?Infra Credits/i);
     if (!match) throw new Error('Could not read Infra Credits balance from Layer3 console');
-    return Number(match[1].replaceAll(',', ''));
+    return match[1].replaceAll(',', '');
+  }
+
+  async readBalance() {
+    return Number(await this.readBalanceText());
   }
 
   async openInstance() {
     await this.ensureReady(this.config.instanceUrl);
-    const instance = this.page.getByText(this.config.instanceName, { exact: true }).first();
-    if (!await instance.isVisible().catch(() => false)) {
+    await this.page.waitForFunction(
+      (instanceName) => (document.body?.innerText || '').includes(instanceName),
+      this.config.instanceName,
+      { timeout: 45_000 },
+    ).catch(() => {});
+    const body = await this.page.locator('body').innerText().catch(() => '');
+    if (!body.includes(this.config.instanceName)) {
       throw new Error(`Instance not found: ${this.config.instanceName}`);
     }
   }
@@ -104,35 +163,58 @@ export class Layer3Browser {
   async status() {
     return this.serial(async () => {
       await this.openInstance();
+      const balanceText = await this.readBalanceText();
       return {
-        balance: await this.readBalance(),
+        balance: Number(balanceText),
+        balanceText,
         instanceStatus: await this.readInstanceStatus(),
       };
     });
   }
 
-  async clickPowerControl(kind) {
+  async balanceText() {
+    return this.serial(async () => {
+      await this.openInstance();
+      return this.readBalanceText();
+    });
+  }
+
+  async findPowerControl(kind) {
     const status = this.page.getByText(/^Status:/i).first();
     if (!await status.isVisible().catch(() => false)) {
       throw new Error('Could not locate the Layer3 power control area');
     }
 
-    const actionPanel = status.locator('xpath=../..');
-    const powerControl = actionPanel.locator('button').nth(3);
-    if (!await powerControl.isVisible().catch(() => false)) {
-      throw new Error('Could not locate the Layer3 power button');
+    const observedLabels = new Set();
+    for (const depth of [2, 3, 4]) {
+      const ancestor = Array.from({ length: depth }, () => '..').join('/');
+      const buttons = status.locator(`xpath=${ancestor}`).locator('button');
+      const count = Math.min(await buttons.count(), 30);
+
+      for (let index = 0; index < count; index += 1) {
+        const candidate = buttons.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+
+        await candidate.hover().catch(() => {});
+        await this.page.waitForTimeout(250);
+        const labels = await this.page.locator('[role="tooltip"]:visible').allInnerTexts().catch(() => []);
+        const label = labels.at(-1)?.trim() || '';
+        if (label) observedLabels.add(label);
+        if (isExpectedPowerAction(kind, label)) {
+          return { control: candidate, label };
+        }
+      }
     }
 
-    await powerControl.hover();
-    await this.page.waitForTimeout(250);
-    const tooltip = this.page.getByRole('tooltip').last();
-    const label = await tooltip.innerText().catch(() => '');
-    const expected = kind === 'start' ? /power on|start|run/i : /power off|shut down|shutdown|stop/i;
-    if (!expected.test(label)) {
-      throw new Error(`Unexpected Layer3 power action: ${label || 'unlabelled button'}`);
-    }
+    const expected = kind === 'start' ? 'Power On' : 'Power Off';
+    const observed = [...observedLabels].join(', ') || 'none';
+    throw new Error(`Could not locate the Layer3 ${expected} control (seen: ${observed})`);
+  }
 
-    await powerControl.click();
+  async clickPowerControl(kind) {
+    const { control, label } = await this.findPowerControl(kind);
+    this.logger.info('Layer3 power control located', { kind, label });
+    await control.click();
     await this.page.waitForTimeout(350);
     const dialog = this.page.getByRole('dialog').last();
     if (await dialog.isVisible().catch(() => false)) {
@@ -146,20 +228,44 @@ export class Layer3Browser {
   async waitForStatus(expected, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     let last = 'UNKNOWN';
+    let confirmations = 0;
     while (Date.now() < deadline) {
       await this.page.waitForTimeout(3000);
       await this.ensureReady(this.config.instanceUrl);
       last = await this.readInstanceStatus();
-      if (last === expected) return last;
+      const expectedPowerKind = expectedPowerControlForStatus(expected);
+      if (last !== expected || !expectedPowerKind) {
+        confirmations = 0;
+        continue;
+      }
+
+      try {
+        const { label } = await this.findPowerControl(expectedPowerKind);
+        confirmations += 1;
+        this.logger.info('Layer3 status verification passed', {
+          status: last,
+          powerControl: label,
+          confirmation: confirmations,
+        });
+        if (confirmations >= 2) return last;
+      } catch (error) {
+        confirmations = 0;
+        this.logger.warn('Layer3 status verification disagreed', {
+          status: last,
+          error: error.message,
+        });
+      }
     }
-    throw new Error(`Timed out waiting for ${expected}; last status was ${last}`);
+    throw new Error(`Timed out waiting for verified ${expected}; last status was ${last}`);
   }
 
   async start() {
     return this.serial(async () => {
       await this.openInstance();
       const current = await this.readInstanceStatus();
-      if (current === 'RUNNING') return { changed: false, status: current };
+      if (current === 'RUNNING') {
+        return { changed: false, status: await this.waitForStatus('RUNNING', 60_000) };
+      }
       await this.clickPowerControl('start');
       return { changed: true, status: await this.waitForStatus('RUNNING', 3 * 60_000) };
     });
@@ -169,7 +275,9 @@ export class Layer3Browser {
     return this.serial(async () => {
       await this.openInstance();
       const current = await this.readInstanceStatus();
-      if (current === 'STOPPED') return { changed: false, status: current };
+      if (current === 'STOPPED') {
+        return { changed: false, status: await this.waitForStatus('STOPPED', 60_000) };
+      }
       await this.clickPowerControl('stop');
       return { changed: true, status: await this.waitForStatus('STOPPED', 11 * 60_000) };
     });

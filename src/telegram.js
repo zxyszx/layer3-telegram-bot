@@ -75,15 +75,29 @@ export class TelegramBot {
 }
 
 export const mainKeyboard = {
-  inline_keyboard: [
-    [{ text: '刷新状态', callback_data: 'status' }],
-    [
+  inline_keyboard: [[{ text: '刷新状态', callback_data: 'status' }]],
+};
+
+export function statusKeyboard(status) {
+  const actions = status === 'STOPPED'
+    ? [
       { text: '启动', callback_data: 'start_request' },
       { text: '启动 1 小时', callback_data: 'start1h_request' },
-      { text: '立即关机', callback_data: 'stop_request' },
+    ]
+    : status === 'RUNNING'
+      ? [
+        { text: '启动 1 小时', callback_data: 'start1h_request' },
+        { text: '立即关机', callback_data: 'stop_request' },
+      ]
+      : [];
+
+  return {
+    inline_keyboard: [
+      [{ text: '刷新状态', callback_data: 'status' }],
+      ...(actions.length ? [actions] : []),
     ],
-  ],
-};
+  };
+}
 
 export function confirmKeyboard(action) {
   const labels = {

@@ -1,9 +1,10 @@
 export class AutoStopScheduler {
-  constructor(store, stopAction, notify, logger) {
+  constructor(store, stopAction, notify, logger, retryDelayMs = 5 * 60_000) {
     this.store = store;
     this.stopAction = stopAction;
     this.notify = notify;
     this.logger = logger;
+    this.retryDelayMs = retryDelayMs;
     this.timer = null;
   }
 
@@ -13,7 +14,11 @@ export class AutoStopScheduler {
   }
 
   async schedule(minutes) {
-    const autoStopAt = new Date(Date.now() + minutes * 60_000).toISOString();
+    return this.scheduleSeconds(minutes * 60);
+  }
+
+  async scheduleSeconds(seconds) {
+    const autoStopAt = new Date(Date.now() + seconds * 1000).toISOString();
     await this.arm(autoStopAt, true);
     return autoStopAt;
   }
@@ -40,7 +45,13 @@ export class AutoStopScheduler {
       await this.notify('定时任务已执行：机器已关机。');
     } catch (error) {
       this.logger.error('Auto-stop failed', { error: error.message });
-      await this.notify(`自动关机失败：${error.message}\n请立即手动检查机器状态。`);
+      const state = await this.store.read().catch(() => ({}));
+      if (state.autoStopAt) {
+        this.timer = setTimeout(() => this.execute(), this.retryDelayMs);
+        this.logger.warn('Auto-stop retry armed', { retryDelayMs: this.retryDelayMs });
+      }
+      const retryMinutes = Math.round(this.retryDelayMs / 60_000);
+      await this.notify(`自动关机失败：${error.message}\n机器人将在 ${retryMinutes} 分钟后自动重试，请留意状态。`);
     }
   }
 
