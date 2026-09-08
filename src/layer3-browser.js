@@ -650,10 +650,18 @@ export class Layer3Browser {
 
   async status() {
     return this.serial(async () => {
-      await this.openInstance();
+      if (!this.config.instanceUrl) {
+        throw new Error('Layer3 instance is not bound');
+      }
+      await this.ensureReady(this.config.instancesUrl);
+      await this.waitForApiInstances();
+      const apiInstance = this.currentInstanceFromApi();
+      if (!apiInstance) {
+        throw new Error(`Instance not found: ${this.config.instanceName}`);
+      }
       return {
         balance: await this.readBalance(),
-        instanceStatus: await this.readInstanceStatus(),
+        instanceStatus: apiInstance.status || await this.readInstanceStatus(),
       };
     });
   }
