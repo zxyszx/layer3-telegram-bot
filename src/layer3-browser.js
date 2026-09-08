@@ -127,7 +127,7 @@ export class Layer3Browser {
       hasPassword: Boolean(this.config.password),
     });
 
-    if (await this.fillFirstMatchingInput([
+    const emailFilled = await this.fillFirstMatchingInput([
       'input[type="email"]',
       'input[name*="email" i]',
       'input[name*="user" i]',
@@ -138,7 +138,16 @@ export class Layer3Browser {
       'input[placeholder*="mail" i]',
       'input[type="text"]',
       'input:not([type])',
-    ], this.config.email, { preferPassword: false })) {
+    ], this.config.email, { preferPassword: false });
+    const passwordVisible = await this.hasVisibleMatchingInput([
+      'input[type="password"]',
+      'input[name*="password" i]',
+      'input[id*="password" i]',
+      'input[autocomplete*="password" i]',
+      'input[placeholder*="password" i]',
+    ]);
+
+    if (emailFilled && !passwordVisible) {
       await this.clickLoginButton(/continue|next|sign in|log in|login|submit/i).catch(() => {});
       await this.page.waitForTimeout(1600);
     }
@@ -155,6 +164,15 @@ export class Layer3Browser {
       await this.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
       await this.waitForConsoleLoaded();
     }
+  }
+
+  async hasVisibleMatchingInput(selectors) {
+    for (const selector of selectors) {
+      if (await this.page.locator(selector).first().isVisible().catch(() => false)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async fillFirstMatchingInput(selectors, value, options = {}) {
