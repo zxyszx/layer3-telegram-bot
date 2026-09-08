@@ -53,6 +53,60 @@ function parseRowDetails(text) {
   };
 }
 
+function deepStrings(value, results = []) {
+  if (value == null) return results;
+  if (typeof value === 'string' || typeof value === 'number') {
+    results.push(String(value));
+    return results;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) deepStrings(item, results);
+    return results;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) deepStrings(item, results);
+  }
+  return results;
+}
+
+function findFirstMatchingString(value, pattern) {
+  return deepStrings(value).find((item) => pattern.test(item)) || '';
+}
+
+function normalizeStatus(value) {
+  for (const [status, pattern] of STATUS_PATTERNS) {
+    if (pattern.test(String(value || ''))) return status;
+  }
+  return '';
+}
+
+function parseApiInstance(vm, projectsById, consoleOrigin) {
+  const name = vm.name || vm.slug || findFirstMatchingString(vm, /^vm-[a-z0-9-]+$/i);
+  if (!name) return null;
+  const project = vm.project || projectsById.get(vm.project_id) || {};
+  const projectSlug = project.slug || vm.project_slug || findFirstMatchingString(project, /^default-\d+$/i);
+  const strings = deepStrings(vm);
+  const memoryStorage = strings
+    .filter((item) => /^\d+(?:\.\d+)?\s*(?:GB|\(GB\))$/i.test(item))
+    .map((item) => item.replace(/[()]/g, '').replace(/\s*GB$/i, ' GB'));
+  const cpu = strings.find((item) => /^\d+\s+CORE$/i.test(item)) || '';
+  const status = normalizeStatus(vm.status || vm.state || vm.power_state || vm.powerState || vm.service_status)
+    || normalizeStatus(strings.join(' '));
+  const ip = findFirstMatchingString(vm, /^(?:\d{1,3}\.){3}\d{1,3}$/);
+
+  return {
+    name,
+    projectSlug,
+    instanceUrl: projectSlug ? buildInstanceUrl(consoleOrigin, projectSlug, name) : '',
+    status,
+    ip,
+    cpu,
+    ram: memoryStorage[0] || '',
+    storage: memoryStorage[1] || '',
+    region: vm.region?.name || vm.region?.display_name || '',
+  };
+}
+
 export class Layer3Browser {
   constructor(config, logger) {
     this.config = config;
@@ -61,6 +115,11 @@ export class Layer3Browser {
     this.page = null;
     this.operation = Promise.resolve();
     this.lastLoginResult = null;
+    this.apiCache = {
+      projects: null,
+      virtualMachines: null,
+      serviceSummary: null,
+    };
   }
 
   async init() {
@@ -79,6 +138,28 @@ export class Layer3Browser {
       ],
     });
     this.page = this.context.pages()[0] || await this.context.newPage();
+    this.trackApiResponses(this.page);
+  }
+
+  trackApiResponses(page) {
+    page.on('response', async (response) => {
+      const url = response.url();
+      if (!/api-console\.layer3\.cloud\/api\//i.test(url)) return;
+      let payload;
+      try {
+        payload = await response.json();
+      } catch {
+        return;
+      }
+
+      if (/\/api\/projects(?:[?#]|$)/i.test(url)) {
+        this.apiCache.projects = payload;
+      } else if (/\/api\/virtual-machines(?:[?#]|$)/i.test(url)) {
+        this.apiCache.virtualMachines = payload;
+      } else if (/\/api\/services\/Virtual%20Machine\/summary/i.test(url)) {
+        this.apiCache.serviceSummary = payload;
+      }
+    });
   }
 
   async close() {
@@ -411,13 +492,56 @@ export class Layer3Browser {
     return Number(match[1].replaceAll(',', ''));
   }
 
+  countsFromApi() {
+    const rows = this.apiCache.serviceSummary?.data;
+    if (!Array.isArray(rows)) return null;
+    const byLabel = new Map(rows.map((row) => [String(row.label || '').toLowerCase(), Number(row.value || 0)]));
+    return {
+      total: byLabel.get('total') || 0,
+      running: byLabel.get('running') || 0,
+      stopped: byLabel.get('stopped') || 0,
+      error: byLabel.get('error') || 0,
+    };
+  }
+
+  instancesFromApi() {
+    const vms = this.apiCache.virtualMachines?.data;
+    if (!Array.isArray(vms)) return [];
+
+    const projectsById = new Map();
+    const projects = this.apiCache.projects?.data;
+    if (Array.isArray(projects)) {
+      for (const project of projects) {
+        if (project.id) projectsById.set(project.id, project);
+      }
+    }
+
+    const seen = new Set();
+    return vms.flatMap((vm) => {
+      const instance = parseApiInstance(vm, projectsById, this.config.consoleOrigin);
+      if (!instance || seen.has(instance.name)) return [];
+      seen.add(instance.name);
+      return [instance];
+    });
+  }
+
+  async waitForApiInstances() {
+    const deadline = Date.now() + 18_000;
+    while (Date.now() < deadline) {
+      const instances = this.instancesFromApi();
+      if (instances.length > 0) return instances;
+      await this.page.waitForTimeout(1000);
+    }
+    return this.instancesFromApi();
+  }
+
   async listInstances() {
     return this.serial(async () => {
       await this.ensureReady(this.config.instancesUrl);
-      await this.page.locator('a[href*="/app/projects/"]').first().waitFor({ state: 'attached', timeout: 10_000 }).catch(() => {});
+      await this.page.locator('a[href*="/app/projects/"]').first().waitFor({ state: 'attached', timeout: 4000 }).catch(() => {});
       const body = await this.page.locator('body').innerText();
       const balance = await this.readBalance().catch(() => null);
-      const counts = parseInstanceCounts(body);
+      const counts = this.countsFromApi() || parseInstanceCounts(body);
       const links = await this.page.locator('a').evaluateAll((anchors) => anchors.map((anchor) => {
         const row = anchor.closest('tr')?.innerText
           || anchor.closest('[class]')?.parentElement?.innerText
@@ -432,7 +556,7 @@ export class Layer3Browser {
         };
       }));
       const seen = new Set();
-      const instances = links.flatMap((link) => {
+      const domInstances = links.flatMap((link) => {
         const match = link.href.match(/\/app\/projects\/([^/]+)\/(vm-[^/]+)\/overview/i);
         if (!match || seen.has(link.href)) return [];
         seen.add(link.href);
@@ -443,6 +567,7 @@ export class Layer3Browser {
           ...parseRowDetails(link.row),
         }];
       });
+      const instances = domInstances.length > 0 ? domInstances : await this.waitForApiInstances();
       if (instances.length === 0) {
         this.logger.warn('No Layer3 instances discovered', {
           url: this.page.url(),
