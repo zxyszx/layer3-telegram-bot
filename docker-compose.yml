@@ -4,6 +4,7 @@ services:
     image: layer3-telegram-bot:local
     build: .
     restart: unless-stopped
+    user: root
     env_file: .env
     volumes:
       - ./data:/app/data

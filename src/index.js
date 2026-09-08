@@ -9,7 +9,12 @@ import { TelegramBot, confirmKeyboard, mainKeyboard } from './telegram.js';
 const baseConfig = loadConfig();
 const logger = createLogger(baseConfig.logLevel);
 const botConfigStore = new JsonStateStore(baseConfig.botConfigPath);
-let botConfig = await botConfigStore.read();
+let botConfig = {};
+try {
+  botConfig = await botConfigStore.read();
+} catch (error) {
+  logger.warn('Could not read saved bot binding; starting unbound', { error: error.message });
+}
 let config = applyBotConfig(baseConfig, botConfig);
 const bindingSessions = new Map();
 const telegramOffsetStore = new JsonStateStore(config.telegramStatePath);

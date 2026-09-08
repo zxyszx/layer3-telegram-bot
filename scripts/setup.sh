@@ -43,7 +43,7 @@ fix_data_permissions() {
   if command -v chown >/dev/null 2>&1; then
     chown -R 1000:1000 "${PROJECT_DIR}/data" 2>/dev/null || true
   fi
-  chmod -R u+rwX "${PROJECT_DIR}/data" 2>/dev/null || true
+  chmod -R a+rwX "${PROJECT_DIR}/data" 2>/dev/null || true
 }
 
 write_env() {
