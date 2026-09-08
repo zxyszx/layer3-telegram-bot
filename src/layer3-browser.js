@@ -23,12 +23,23 @@ function parseNgn(text, labelPattern) {
 
 function parseInstanceCounts(text) {
   const match = text.match(/(\d+)\s+Total\s+(\d+)\s+Running\s+(\d+)\s+Stopped\s+(\d+)\s+Error/i);
-  if (!match) return null;
+  if (match) {
+    return {
+      total: Number(match[1]),
+      running: Number(match[2]),
+      stopped: Number(match[3]),
+      error: Number(match[4]),
+    };
+  }
+
+  const compact = text.replace(/\s+/g, ' ');
+  const alternate = compact.match(/Total\s+(\d+).*?Running\s+(\d+).*?Stopped\s+(\d+).*?Error\s+(\d+)/i);
+  if (!alternate) return null;
   return {
-    total: Number(match[1]),
-    running: Number(match[2]),
-    stopped: Number(match[3]),
-    error: Number(match[4]),
+    total: Number(alternate[1]),
+    running: Number(alternate[2]),
+    stopped: Number(alternate[3]),
+    error: Number(alternate[4]),
   };
 }
 
@@ -73,6 +84,17 @@ function findFirstMatchingString(value, pattern) {
   return deepStrings(value).find((item) => pattern.test(item)) || '';
 }
 
+function isPublicIpv4(value) {
+  const parts = String(value || '').split('.').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = parts;
+  if (a === 10 || a === 127 || a === 0 || a >= 224) return false;
+  if (a === 172 && b >= 16 && b <= 31) return false;
+  if (a === 192 && b === 168) return false;
+  if (a === 169 && b === 254) return false;
+  return true;
+}
+
 function normalizeStatus(value) {
   for (const [status, pattern] of STATUS_PATTERNS) {
     if (pattern.test(String(value || ''))) return status;
@@ -92,7 +114,7 @@ function parseApiInstance(vm, projectsById, consoleOrigin) {
   const cpu = strings.find((item) => /^\d+\s+CORE$/i.test(item)) || '';
   const status = normalizeStatus(vm.status || vm.state || vm.power_state || vm.powerState || vm.service_status)
     || normalizeStatus(strings.join(' '));
-  const ip = findFirstMatchingString(vm, /^(?:\d{1,3}\.){3}\d{1,3}$/);
+  const ip = strings.find((item) => isPublicIpv4(item)) || findFirstMatchingString(vm, /^(?:\d{1,3}\.){3}\d{1,3}$/);
 
   return {
     name,
