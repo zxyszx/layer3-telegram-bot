@@ -1,5 +1,6 @@
 services:
   bot:
+    container_name: layer3-telegram-bot
     image: layer3-telegram-bot:local
     build: .
     restart: unless-stopped
