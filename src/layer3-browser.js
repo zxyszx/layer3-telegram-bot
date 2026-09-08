@@ -85,7 +85,8 @@ export class Layer3Browser {
     const currentUrl = this.page.url();
     const body = await this.page.locator('body').innerText().catch(() => '');
     if (/login|sign-?in/i.test(currentUrl) || /sign in|log in|login/i.test(body.slice(0, 500))) {
-      throw new LoginRequiredError('Layer3 login expired. Run npm run login or configure login credentials.');
+      await this.saveDebugSnapshot('login-required');
+      throw new LoginRequiredError('Layer3 自动登录失败。请确认账号密码正确；如果页面要求验证码或二次验证，需要先人工登录一次保存会话。');
     }
   }
 
@@ -103,19 +104,70 @@ export class Layer3Browser {
   }
 
   async tryAutomaticLogin() {
-    const password = this.page.locator('input[type="password"]').first();
-    if (!await password.isVisible().catch(() => false)) return;
     if (!this.config.email || !this.config.password) return;
 
-    const email = this.page.locator('input[type="email"], input[name*="email" i], input[name*="user" i]').first();
-    if (!await email.isVisible().catch(() => false)) return;
+    const loginText = await this.page.locator('body').innerText().catch(() => '');
+    const loginUrl = this.page.url();
+    const looksLikeLogin = /login|sign-?in/i.test(loginUrl)
+      || /sign in|log in|login|email|password/i.test(loginText.slice(0, 1000));
+    if (!looksLikeLogin) return;
 
     this.logger.info('Refreshing Layer3 login session');
-    await email.fill(this.config.email);
-    await password.fill(this.config.password);
-    const submit = this.page.getByRole('button', { name: /sign in|log in|login/i }).first();
-    await submit.click();
-    await this.page.waitForTimeout(2200);
+    const email = this.page.locator([
+      'input[type="email"]',
+      'input[name*="email" i]',
+      'input[name*="user" i]',
+      'input[placeholder*="email" i]',
+      'input[placeholder*="mail" i]',
+      'input[type="text"]',
+    ].join(', ')).first();
+
+    if (await email.isVisible().catch(() => false)) {
+      await email.fill(this.config.email);
+      await this.clickLoginButton(/continue|next|sign in|log in|login|submit/i).catch(() => {});
+      await this.page.waitForTimeout(1600);
+    }
+
+    const password = this.page.locator('input[type="password"], input[name*="password" i], input[placeholder*="password" i]').first();
+    if (await password.isVisible().catch(() => false)) {
+      await password.fill(this.config.password);
+      await this.clickLoginButton(/sign in|log in|login|continue|next|submit/i);
+      await this.page.waitForTimeout(4000);
+      await this.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+      await this.waitForConsoleLoaded();
+    }
+  }
+
+  async clickLoginButton(pattern) {
+    const button = this.page.getByRole('button', { name: pattern }).first();
+    if (await button.isVisible().catch(() => false)) {
+      await button.click();
+      return;
+    }
+
+    const submit = this.page.locator('button[type="submit"], input[type="submit"]').first();
+    if (await submit.isVisible().catch(() => false)) {
+      await submit.click();
+      return;
+    }
+
+    await this.page.keyboard.press('Enter');
+  }
+
+  async saveDebugSnapshot(name) {
+    try {
+      await fs.mkdir(this.config.dataDir, { recursive: true });
+      const text = await this.page.locator('body').innerText().catch(() => '');
+      await fs.writeFile(`${this.config.dataDir}/${name}.txt`, [
+        `url=${this.page.url()}`,
+        `title=${await this.page.title().catch(() => '')}`,
+        '',
+        text.slice(0, 4000),
+      ].join('\n'));
+      await this.page.screenshot({ path: `${this.config.dataDir}/${name}.png`, fullPage: true }).catch(() => {});
+    } catch (error) {
+      this.logger.warn('Could not save debug snapshot', { error: error.message });
+    }
   }
 
   async readBalance() {
