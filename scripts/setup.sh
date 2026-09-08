@@ -38,11 +38,18 @@ env_value() {
   grep -E "^${key}=" "${ENV_FILE}" | tail -n 1 | cut -d= -f2-
 }
 
+fix_data_permissions() {
+  mkdir -p "${PROJECT_DIR}/data"
+  if command -v chown >/dev/null 2>&1; then
+    chown -R 1000:1000 "${PROJECT_DIR}/data" 2>/dev/null || true
+  fi
+  chmod -R u+rwX "${PROJECT_DIR}/data" 2>/dev/null || true
+}
+
 write_env() {
   local token="$1"
   local temporary
   temporary="$(mktemp "${PROJECT_DIR}/.env.XXXXXX")"
-  trap 'rm -f "${temporary}"' RETURN
 
   cat >"${temporary}" <<EOF
 TELEGRAM_BOT_TOKEN=${token}
@@ -68,8 +75,7 @@ EOF
 
   chmod 600 "${temporary}"
   mv "${temporary}" "${ENV_FILE}"
-  mkdir -p "${PROJECT_DIR}/data"
-  chmod 700 "${PROJECT_DIR}/data"
+  fix_data_permissions
 }
 
 configure_token() {
@@ -110,6 +116,7 @@ start_bot() {
     red "还没有配置 Bot Token，请先选择 1。"
     return 1
   fi
+  fix_data_permissions
   docker compose up -d --build
   sleep 2
   docker compose ps
@@ -131,6 +138,7 @@ stop_bot() {
 
 restart_bot() {
   check_docker
+  fix_data_permissions
   docker compose restart "${SERVICE_NAME}"
   green "机器人已重启。"
 }
@@ -147,12 +155,14 @@ update_project() {
   else
     yellow "当前目录不是 git 仓库，跳过拉取代码。"
   fi
+  fix_data_permissions
   docker compose up -d --build
   green "更新完成，机器人已重新启动。"
 }
 
 show_status() {
   check_docker
+  fix_data_permissions
   docker compose ps
   printf '\n最近日志：\n'
   docker compose logs --tail=50 "${SERVICE_NAME}" || true
@@ -165,6 +175,7 @@ reset_binding() {
     return 0
   fi
   rm -f "${PROJECT_DIR}/data/bot-config.json" "${PROJECT_DIR}/data/runtime.json"
+  fix_data_permissions
   green "绑定信息已删除。重启机器人后，首次 /start 的 Telegram 用户会成为管理员。"
 }
 

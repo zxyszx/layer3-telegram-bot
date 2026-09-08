@@ -11,6 +11,9 @@ export class JsonStateStore {
       return JSON.parse(await fs.readFile(this.filePath, 'utf8'));
     } catch (error) {
       if (error.code === 'ENOENT') return {};
+      if (error.code === 'EACCES') {
+        throw new Error(`Cannot read ${this.filePath}. Please run ngn status to repair data permissions, then restart the bot.`);
+      }
       throw error;
     }
   }
