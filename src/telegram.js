@@ -21,10 +21,11 @@ export class TelegramBot {
   }
 
   async send(chatId, text, replyMarkup) {
+    const isHtml = /<\/?b>/i.test(text);
     return this.call('sendMessage', {
       chat_id: chatId,
       text,
-      parse_mode: 'HTML',
+      ...(isHtml ? { parse_mode: 'HTML' } : {}),
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
   }

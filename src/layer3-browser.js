@@ -80,12 +80,26 @@ export class Layer3Browser {
     await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
     await this.page.waitForTimeout(1800);
     await this.tryAutomaticLogin();
+    await this.waitForConsoleLoaded();
 
     const currentUrl = this.page.url();
     const body = await this.page.locator('body').innerText().catch(() => '');
     if (/login|sign-?in/i.test(currentUrl) || /sign in|log in|login/i.test(body.slice(0, 500))) {
       throw new LoginRequiredError('Layer3 login expired. Run npm run login or configure login credentials.');
     }
+  }
+
+  async waitForConsoleLoaded() {
+    const deadline = Date.now() + 25_000;
+    let body = '';
+    while (Date.now() < deadline) {
+      body = await this.page.locator('body').innerText().catch(() => '');
+      if (body && !/Connecting to the cloud/i.test(body) && /Infra Credits|Instances|Dashboard|Virtual Machine/i.test(body)) {
+        return;
+      }
+      await this.page.waitForTimeout(1000);
+    }
+    this.logger.warn('Layer3 console still looked busy after waiting', { body: body.slice(0, 120) });
   }
 
   async tryAutomaticLogin() {
@@ -115,11 +129,13 @@ export class Layer3Browser {
   async listInstances() {
     return this.serial(async () => {
       await this.ensureReady(this.config.instancesUrl);
+      await this.page.locator('a[href*="/app/projects/"]').first().waitFor({ state: 'attached', timeout: 10_000 }).catch(() => {});
       const body = await this.page.locator('body').innerText();
       const balance = await this.readBalance().catch(() => null);
       const counts = parseInstanceCounts(body);
-      const links = await this.page.locator('a[href*="/app/projects/"][href*="/overview"]').evaluateAll((anchors) => anchors.map((anchor) => {
-        const row = anchor.closest('[class]')?.parentElement?.innerText
+      const links = await this.page.locator('a').evaluateAll((anchors) => anchors.map((anchor) => {
+        const row = anchor.closest('tr')?.innerText
+          || anchor.closest('[class]')?.parentElement?.innerText
           || anchor.closest('tr')?.innerText
           || anchor.parentElement?.innerText
           || anchor.textContent
@@ -142,6 +158,13 @@ export class Layer3Browser {
           ...parseRowDetails(link.row),
         }];
       });
+      if (instances.length === 0) {
+        this.logger.warn('No Layer3 instances discovered', {
+          url: this.page.url(),
+          title: await this.page.title().catch(() => ''),
+          body: body.slice(0, 500),
+        });
+      }
 
       for (const instance of instances) {
         await this.ensureReady(instance.instanceUrl);

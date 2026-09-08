@@ -72,7 +72,7 @@ async function promptBindingStep(chatId, session) {
     email: '请输入 Layer3 登录邮箱：',
     password: '请输入 Layer3 登录密码：\n提示：Telegram 聊天记录会保存这条消息，建议绑定完成后手动删除密码消息。',
     instanceChoice: '请输入要绑定的机器编号：',
-    projectSlug: '请输入 Layer3 项目标识，不是页面显示名。请打开机器详情页，从地址栏 /app/projects/<这里>/机器名/overview 复制，例如 default-828：',
+    projectSlug: '请输入 Layer3 项目标识，不是页面显示名。请打开机器详情页，从地址栏 /app/projects/项目标识/机器名/overview 复制，例如 default-828：',
     instanceName: '请输入 Layer3 机器实例名称，例如 vm-f9k5yf10c：',
     hourlyPrice: '请输入完整小时价格 NGN，例如 22.37702。发送“默认”使用 22.37702：',
     autoStopMinutes: '请输入“启动 1 小时”按钮的自动关机分钟数。发送“默认”使用 60：',
