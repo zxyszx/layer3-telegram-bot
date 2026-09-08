@@ -81,10 +81,6 @@ async function promptBindingStep(chatId, session) {
       ? '请输入 Layer3 登录密码，或发送“默认”继续使用已保存密码：'
       : '请输入 Layer3 登录密码：\n提示：Telegram 聊天记录会保存这条消息，建议绑定完成后手动删除密码消息。',
     instanceChoice: '请输入要绑定的机器编号：',
-    projectSlug: '请输入 Layer3 项目标识，不是页面显示名。请打开机器详情页，从地址栏 /app/projects/项目标识/机器名/overview 复制，例如 default-828：',
-    instanceName: '请输入 Layer3 机器实例名称，例如 vm-f9k5yf10c：',
-    hourlyPrice: '请输入完整小时价格 NGN，例如 22.37702。发送“默认”使用 22.37702：',
-    autoStopMinutes: '请输入“启动 1 小时”按钮的自动关机分钟数。发送“默认”使用 60：',
   };
   await telegram.send(chatId, prompts[session.step]);
 }
@@ -134,6 +130,24 @@ function formatSelectedInstance(instance) {
   ].filter(Boolean).join('\n');
 }
 
+async function finishBindingWithInstance(chatId, session, instance) {
+  if (!instance?.projectSlug || !instance?.name) {
+    await telegram.send(chatId, [
+      '自动读取到了机器，但没有拿到完整项目标识和机器名，无法安全绑定。',
+      '请在服务器运行 ngn diagnostics 查看页面诊断信息。',
+    ].join('\n'));
+    bindingSessions.delete(String(chatId));
+    return;
+  }
+
+  session.values.instanceName = instance.name;
+  session.values.projectSlug = instance.projectSlug;
+  session.values.hourlyPrice = config.hourlyPrice || baseConfig.hourlyPrice;
+  session.values.autoStopMinutes = config.autoStopMinutes || baseConfig.autoStopMinutes;
+  await telegram.send(chatId, formatSelectedInstance(instance));
+  await finishBinding(chatId, session.values);
+}
+
 async function discoverInstancesForBinding(chatId, session) {
   const temporaryConfig = applyBotConfig(baseConfig, {
     ...botConfig,
@@ -148,34 +162,33 @@ async function discoverInstancesForBinding(chatId, session) {
   try {
     discovery = await layer3.listInstances();
   } catch (error) {
-    logger.warn('Layer3 discovery failed during binding; falling back to manual instance input', {
+    logger.warn('Layer3 discovery failed during binding', {
       error: error.message,
     });
     await telegram.send(chatId, [
       `自动读取机器列表失败：${error.message}`,
       '',
-      '账号和密码已临时记住，本次不用重新输入。请手动输入项目标识和机器名完成绑定。',
+      '已取消绑定流程，不再要求手动输入项目标识和机器名。',
+      '请在服务器运行 ngn diagnostics 查看登录页面、接口状态和最近日志。',
     ].join('\n'));
-    session.step = 'projectSlug';
-    await promptBindingStep(chatId, session);
+    bindingSessions.delete(String(chatId));
     return;
   }
   session.discovery = discovery;
 
   if (discovery.instances.length === 0) {
-    await telegram.send(chatId, '没有自动读取到机器列表，请改为手动输入项目标识和机器名。');
-    session.step = 'projectSlug';
-    await promptBindingStep(chatId, session);
+    await telegram.send(chatId, [
+      '已经登录 Layer3，但没有自动读取到任何机器。',
+      '已取消绑定流程，不再要求手动输入项目标识和机器名。',
+      '请确认 Layer3 控制台实例列表里有机器，或在服务器运行 ngn diagnostics 查看页面诊断信息。',
+    ].join('\n'));
+    bindingSessions.delete(String(chatId));
     return;
   }
 
   await telegram.send(chatId, formatInstanceList(discovery));
   if (discovery.instances.length === 1 && discovery.instances[0].projectSlug) {
-    session.values.instanceName = discovery.instances[0].name;
-    session.values.projectSlug = discovery.instances[0].projectSlug;
-    await telegram.send(chatId, formatSelectedInstance(discovery.instances[0]));
-    session.step = 'hourlyPrice';
-    await promptBindingStep(chatId, session);
+    await finishBindingWithInstance(chatId, session, discovery.instances[0]);
     return;
   }
 
@@ -233,7 +246,7 @@ async function handleBindingMessage(chatId, text) {
   if (session.step === 'email') {
     value = value.replace(/^\/bind(@\w+)?\s+/i, '').trim();
   }
-  if (session.step !== 'hourlyPrice' && session.step !== 'autoStopMinutes' && !value) {
+  if (!value) {
     await telegram.send(chatId, '这一项不能为空，请重新输入。');
     await promptBindingStep(chatId, session);
     return true;
@@ -268,37 +281,7 @@ async function handleBindingMessage(chatId, text) {
       await telegram.send(chatId, '机器编号无效，请重新输入列表中的编号。');
       return true;
     }
-    session.values.instanceName = instance.name;
-    if (!instance.projectSlug) {
-      await telegram.send(chatId, `${formatSelectedInstance(instance)}\n\n没有自动识别项目标识，需要手动输入一次。`);
-      session.step = 'projectSlug';
-    } else {
-      session.values.projectSlug = instance.projectSlug;
-      await telegram.send(chatId, formatSelectedInstance(instance));
-      session.step = 'hourlyPrice';
-    }
-  } else if (session.step === 'projectSlug') {
-    session.values.projectSlug = value;
-    session.step = session.values.instanceName ? 'hourlyPrice' : 'instanceName';
-  } else if (session.step === 'instanceName') {
-    session.values.instanceName = value;
-    session.step = 'hourlyPrice';
-  } else if (session.step === 'hourlyPrice') {
-    const hourlyPrice = isDefaultInput(value) ? 22.37702 : Number(value);
-    if (!Number.isFinite(hourlyPrice) || hourlyPrice <= 0) {
-      await telegram.send(chatId, '小时价格必须是大于 0 的数字，或发送“默认”。请重新输入。');
-      return true;
-    }
-    session.values.hourlyPrice = hourlyPrice;
-    session.step = 'autoStopMinutes';
-  } else if (session.step === 'autoStopMinutes') {
-    const autoStopMinutes = isDefaultInput(value) ? 60 : Number(value);
-    if (!Number.isFinite(autoStopMinutes) || autoStopMinutes <= 0) {
-      await telegram.send(chatId, '自动关机分钟数必须是大于 0 的数字，或发送“默认”。请重新输入。');
-      return true;
-    }
-    session.values.autoStopMinutes = autoStopMinutes;
-    await finishBinding(chatId, session.values);
+    await finishBindingWithInstance(chatId, session, instance);
     return true;
   }
 

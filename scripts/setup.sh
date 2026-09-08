@@ -125,8 +125,9 @@ start_bot() {
 下一步：
 1. 打开 Telegram，私聊你的机器人。
 2. 发送 /start，当前 Chat ID 会自动成为管理员。
-3. 发送 /bind，按提示输入 Layer3 邮箱、密码、项目和机器名。
-4. 机器人检查状态成功后，就可以用按钮启动或关闭机器。
+3. 发送 /bind，按提示输入 Layer3 邮箱和密码。
+4. 机器人自动读取账户余额和机器列表；只有多台机器时需要发送编号选择。
+5. 机器人检查状态成功后，就可以用按钮启动或关闭机器。
 EOF
 }
 
@@ -166,6 +167,39 @@ show_status() {
   docker compose ps
   printf '\n最近日志：\n'
   docker compose logs --tail=50 "${SERVICE_NAME}" || true
+}
+
+diagnostics() {
+  check_docker
+  fix_data_permissions
+  printf '当前代码版本：\n'
+  git log -1 --oneline 2>/dev/null || true
+  printf '\n容器状态：\n'
+  docker compose ps || true
+  printf '\n最近日志：\n'
+  docker compose logs --tail=120 "${SERVICE_NAME}" || true
+  printf '\n登录接口诊断 data/login-result.json：\n'
+  if [[ -f "${PROJECT_DIR}/data/login-result.json" ]]; then
+    sed -E \
+      -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g' \
+      -e 's/(password["'\'']?[[:space:]]*[:=][[:space:]]*["'\''])[^"'\'']+/\1[redacted]/Ig' \
+      -e 's/(token["'\'']?[[:space:]]*[:=][[:space:]]*["'\''])[^"'\'']+/\1[redacted]/Ig' \
+      "${PROJECT_DIR}/data/login-result.json" || true
+  else
+    yellow "暂无 login-result.json。请先在 Telegram 发送 /bind 触发一次自动登录。"
+  fi
+  printf '\n登录页面摘要 data/login-required.txt：\n'
+  if [[ -f "${PROJECT_DIR}/data/login-required.txt" ]]; then
+    sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g' "${PROJECT_DIR}/data/login-required.txt" | head -n 80 || true
+  else
+    yellow "暂无 login-required.txt。"
+  fi
+  printf '\n页面输入控件 data/login-required-inputs.json：\n'
+  if [[ -f "${PROJECT_DIR}/data/login-required-inputs.json" ]]; then
+    head -n 120 "${PROJECT_DIR}/data/login-required-inputs.json" || true
+  else
+    yellow "暂无 login-required-inputs.json。"
+  fi
 }
 
 reset_binding() {
@@ -213,7 +247,8 @@ Layer3 Telegram Bot 一键管理菜单
 7. 查看容器状态和最近日志
 8. 测试 Telegram Bot Token
 9. 重置 Telegram 和 Layer3 绑定
-10. 卸载容器（保留配置和数据）
+10. 登录失败诊断
+11. 卸载容器（保留配置和数据）
 0. 退出
 EOF
     printf '\n'
@@ -228,7 +263,8 @@ EOF
       7) show_status || true; pause ;;
       8) test_token || true; pause ;;
       9) reset_binding || true; pause ;;
-      10) uninstall_bot || true; pause ;;
+      10) diagnostics || true; pause ;;
+      11) uninstall_bot || true; pause ;;
       0) exit 0 ;;
       *) red "无效选择"; pause ;;
     esac
@@ -243,6 +279,7 @@ case "${1:-}" in
   --logs|logs) show_logs ;;
   --update|update) update_project ;;
   --status|status) show_status ;;
+  --diagnostics|diagnostics) diagnostics ;;
   --reset-binding|reset-binding) reset_binding ;;
   *) menu ;;
 esac

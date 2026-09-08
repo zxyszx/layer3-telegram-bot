@@ -32,6 +32,13 @@ function parseInstanceCounts(text) {
   };
 }
 
+function sanitizeText(text) {
+  return String(text || '')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
+    .replace(/password["']?\s*[:=]\s*["'][^"']+["']/gi, 'password:"[redacted]"')
+    .replace(/token["']?\s*[:=]\s*["'][^"']+["']/gi, 'token:"[redacted]"');
+}
+
 function parseRowDetails(text) {
   const ip = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)?.[0] || '';
   const cpu = text.match(/\b\d+\s+CORE\b/i)?.[0] || '';
@@ -53,6 +60,7 @@ export class Layer3Browser {
     this.context = null;
     this.page = null;
     this.operation = Promise.resolve();
+    this.lastLoginResult = null;
   }
 
   async init() {
@@ -87,8 +95,23 @@ export class Layer3Browser {
     const body = await this.page.locator('body').innerText().catch(() => '');
     if (/login|sign-?in/i.test(currentUrl) || /sign in|log in|login/i.test(body.slice(0, 500))) {
       await this.saveDebugSnapshot('login-required');
-      throw new LoginRequiredError('Layer3 自动登录失败。请确认账号密码正确；如果页面要求验证码或二次验证，需要先人工登录一次保存会话。');
+      const message = this.buildLoginFailureMessage(body);
+      throw new LoginRequiredError(message);
     }
+  }
+
+  buildLoginFailureMessage(body) {
+    const combined = `${body || ''}\n${this.lastLoginResult?.body || ''}`;
+    if (/invalid credentials|incorrect|wrong password|invalid email|unauthorized/i.test(combined)) {
+      return 'Layer3 自动登录失败：账号或密码不正确。请重新发送 /bind 输入正确邮箱和密码。';
+    }
+    if (/captcha|verify|verification|two-factor|2fa|otp|code/i.test(combined)) {
+      return 'Layer3 自动登录失败：页面要求验证码或二次验证，需要先人工通过验证后再绑定。';
+    }
+    if (this.lastLoginResult?.status) {
+      return `Layer3 自动登录失败：登录接口返回 HTTP ${this.lastLoginResult.status}。请运行 ngn diagnostics 查看接口返回内容。`;
+    }
+    return 'Layer3 自动登录失败：登录后仍停留在登录页。请运行 ngn diagnostics 查看页面诊断信息。';
   }
 
   async waitForConsoleLoaded() {
@@ -159,10 +182,55 @@ export class Layer3Browser {
       'input[autocomplete*="password" i]',
       'input[placeholder*="password" i]',
     ], this.config.password, { preferPassword: true })) {
+      const loginResponse = this.page.waitForResponse((response) => (
+        /api-console\.layer3\.cloud\/api\/login/i.test(response.url())
+        || /\/api\/login/i.test(response.url())
+      ), { timeout: 12_000 }).catch(() => null);
       await this.clickLoginButton(/sign in|log in|login|continue|next|submit/i);
+      await this.captureLoginResponse(await loginResponse);
       await this.page.waitForTimeout(4000);
       await this.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
       await this.waitForConsoleLoaded();
+    }
+  }
+
+  async captureLoginResponse(response) {
+    if (!response) {
+      this.lastLoginResult = {
+        at: new Date().toISOString(),
+        status: null,
+        url: '',
+        body: 'No /api/login response was observed after submitting the login form.',
+      };
+      await this.saveLoginResult();
+      return;
+    }
+
+    let body = '';
+    try {
+      body = await response.text();
+    } catch (error) {
+      body = `Could not read response body: ${error.message}`;
+    }
+
+    this.lastLoginResult = {
+      at: new Date().toISOString(),
+      status: response.status(),
+      url: response.url(),
+      body: sanitizeText(body).slice(0, 3000),
+    };
+    await this.saveLoginResult();
+  }
+
+  async saveLoginResult() {
+    try {
+      await fs.mkdir(this.config.dataDir, { recursive: true });
+      await fs.writeFile(
+        `${this.config.dataDir}/login-result.json`,
+        JSON.stringify(this.lastLoginResult, null, 2),
+      );
+    } catch (error) {
+      this.logger.warn('Could not save login result', { error: error.message });
     }
   }
 
@@ -246,7 +314,7 @@ export class Layer3Browser {
         `url=${this.page.url()}`,
         `title=${await this.page.title().catch(() => '')}`,
         '',
-        text.slice(0, 4000),
+        sanitizeText(text).slice(0, 4000),
       ].join('\n'));
       await fs.writeFile(`${this.config.dataDir}/${name}-inputs.json`, JSON.stringify(inputs, null, 2));
       await this.page.screenshot({ path: `${this.config.dataDir}/${name}.png`, fullPage: true }).catch(() => {});
