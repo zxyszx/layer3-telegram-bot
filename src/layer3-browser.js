@@ -126,29 +126,66 @@ export class Layer3Browser {
       hasEmail: Boolean(this.config.email),
       hasPassword: Boolean(this.config.password),
     });
-    const email = this.page.locator([
+
+    if (await this.fillFirstMatchingInput([
       'input[type="email"]',
       'input[name*="email" i]',
       'input[name*="user" i]',
+      'input[id*="email" i]',
+      'input[id*="user" i]',
+      'input[autocomplete*="email" i]',
       'input[placeholder*="email" i]',
       'input[placeholder*="mail" i]',
       'input[type="text"]',
-    ].join(', ')).first();
-
-    if (await email.isVisible().catch(() => false)) {
-      await email.fill(this.config.email);
+      'input:not([type])',
+    ], this.config.email, { preferPassword: false })) {
       await this.clickLoginButton(/continue|next|sign in|log in|login|submit/i).catch(() => {});
       await this.page.waitForTimeout(1600);
     }
 
-    const password = this.page.locator('input[type="password"], input[name*="password" i], input[placeholder*="password" i]').first();
-    if (await password.isVisible().catch(() => false)) {
-      await password.fill(this.config.password);
+    if (await this.fillFirstMatchingInput([
+      'input[type="password"]',
+      'input[name*="password" i]',
+      'input[id*="password" i]',
+      'input[autocomplete*="password" i]',
+      'input[placeholder*="password" i]',
+    ], this.config.password, { preferPassword: true })) {
       await this.clickLoginButton(/sign in|log in|login|continue|next|submit/i);
       await this.page.waitForTimeout(4000);
       await this.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
       await this.waitForConsoleLoaded();
     }
+  }
+
+  async fillFirstMatchingInput(selectors, value, options = {}) {
+    for (const selector of selectors) {
+      const input = this.page.locator(selector).first();
+      if (await input.isVisible().catch(() => false)) {
+        await input.fill(value);
+        return true;
+      }
+    }
+
+    return this.page.evaluate(({ inputValue, preferPassword }) => {
+      const candidates = [...document.querySelectorAll('input')]
+        .filter((input) => {
+          const type = (input.getAttribute('type') || 'text').toLowerCase();
+          if (['hidden', 'checkbox', 'radio', 'submit', 'button'].includes(type)) return false;
+          const box = input.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && !input.disabled && !input.readOnly;
+        });
+      const password = candidates.find((input) => (input.getAttribute('type') || '').toLowerCase() === 'password');
+      const target = password && preferPassword
+        ? password
+        : candidates.find((input) => (input.getAttribute('type') || '').toLowerCase() !== 'password');
+      if (!target) return false;
+
+      target.focus();
+      target.value = inputValue;
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, { inputValue: value, preferPassword: Boolean(options.preferPassword) }).catch(() => false);
   }
 
   async clickLoginButton(pattern) {
@@ -171,12 +208,29 @@ export class Layer3Browser {
     try {
       await fs.mkdir(this.config.dataDir, { recursive: true });
       const text = await this.page.locator('body').innerText().catch(() => '');
+      const inputs = await this.page.evaluate(() => [...document.querySelectorAll('input, button')].map((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          tag: element.tagName.toLowerCase(),
+          type: element.getAttribute('type') || '',
+          name: element.getAttribute('name') || '',
+          id: element.getAttribute('id') || '',
+          placeholder: element.getAttribute('placeholder') || '',
+          autocomplete: element.getAttribute('autocomplete') || '',
+          ariaLabel: element.getAttribute('aria-label') || '',
+          text: element.textContent?.trim().slice(0, 80) || '',
+          visible: box.width > 0 && box.height > 0,
+          disabled: Boolean(element.disabled),
+          readOnly: Boolean(element.readOnly),
+        };
+      })).catch(() => []);
       await fs.writeFile(`${this.config.dataDir}/${name}.txt`, [
         `url=${this.page.url()}`,
         `title=${await this.page.title().catch(() => '')}`,
         '',
         text.slice(0, 4000),
       ].join('\n'));
+      await fs.writeFile(`${this.config.dataDir}/${name}-inputs.json`, JSON.stringify(inputs, null, 2));
       await this.page.screenshot({ path: `${this.config.dataDir}/${name}.png`, fullPage: true }).catch(() => {});
     } catch (error) {
       this.logger.warn('Could not save debug snapshot', { error: error.message });
