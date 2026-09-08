@@ -54,6 +54,8 @@ export class TelegramBot {
   }
 
   async start() {
+    await this.call('deleteWebhook', { drop_pending_updates: false });
+    this.logger.info('Telegram webhook cleared; polling enabled');
     const saved = await this.offsetStore.read();
     this.offset = Number.isSafeInteger(saved.offset) ? saved.offset : 0;
     this.running = true;
