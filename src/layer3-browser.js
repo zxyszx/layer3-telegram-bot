@@ -81,6 +81,7 @@ export class Layer3Browser {
     await this.page.waitForTimeout(1800);
     await this.tryAutomaticLogin();
     await this.waitForConsoleLoaded();
+    await this.tryAutomaticLogin();
 
     const currentUrl = this.page.url();
     const body = await this.page.locator('body').innerText().catch(() => '');
@@ -98,13 +99,22 @@ export class Layer3Browser {
       if (body && !/Connecting to the cloud/i.test(body) && /Infra Credits|Instances|Dashboard|Virtual Machine/i.test(body)) {
         return;
       }
+      if (body && !/Connecting to the cloud/i.test(body) && /sign in|log in|login|password/i.test(body.slice(0, 1000))) {
+        return;
+      }
       await this.page.waitForTimeout(1000);
     }
     this.logger.warn('Layer3 console still looked busy after waiting', { body: body.slice(0, 120) });
   }
 
   async tryAutomaticLogin() {
-    if (!this.config.email || !this.config.password) return;
+    if (!this.config.email || !this.config.password) {
+      this.logger.warn('Layer3 login credentials are not configured for automatic login', {
+        hasEmail: Boolean(this.config.email),
+        hasPassword: Boolean(this.config.password),
+      });
+      return;
+    }
 
     const loginText = await this.page.locator('body').innerText().catch(() => '');
     const loginUrl = this.page.url();
@@ -112,7 +122,10 @@ export class Layer3Browser {
       || /sign in|log in|login|email|password/i.test(loginText.slice(0, 1000));
     if (!looksLikeLogin) return;
 
-    this.logger.info('Refreshing Layer3 login session');
+    this.logger.info('Refreshing Layer3 login session', {
+      hasEmail: Boolean(this.config.email),
+      hasPassword: Boolean(this.config.password),
+    });
     const email = this.page.locator([
       'input[type="email"]',
       'input[name*="email" i]',
