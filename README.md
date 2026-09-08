@@ -21,6 +21,16 @@
 
 服务器需要先安装 Docker Engine 和 Docker Compose 插件。
 
+推荐一行命令安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zxyszx/layer3-telegram-bot/main/install.sh | bash
+```
+
+脚本会自动拉取项目到 `/opt/layer3-telegram-bot`，然后打开安装菜单。菜单中只需要输入 Telegram Bot Token。
+
+也可以手动安装：
+
 ```bash
 git clone https://github.com/zxyszx/layer3-telegram-bot.git
 cd layer3-telegram-bot
