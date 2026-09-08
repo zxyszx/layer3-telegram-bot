@@ -99,9 +99,8 @@ export class Layer3Browser {
     await this.waitForConsoleLoaded();
     await this.tryAutomaticLogin();
 
-    const currentUrl = this.page.url();
-    const body = await this.page.locator('body').innerText().catch(() => '');
-    if (/login|sign-?in/i.test(currentUrl) || /sign in|log in|login/i.test(body.slice(0, 500))) {
+    if (await this.isLoginPage()) {
+      const body = await this.page.locator('body').innerText().catch(() => '');
       await this.saveDebugSnapshot('login-required');
       const message = this.buildLoginFailureMessage(body);
       throw new LoginRequiredError(message);
@@ -133,7 +132,7 @@ export class Layer3Browser {
       if (body && !/Connecting to the cloud/i.test(body) && /Infra Credits|Instances|Dashboard|Virtual Machine/i.test(body)) {
         return;
       }
-      if (body && !/Connecting to the cloud/i.test(body) && /sign in|log in|login|password/i.test(body.slice(0, 1000))) {
+      if (await this.isLoginPage()) {
         return;
       }
       await this.page.waitForTimeout(1000);
@@ -151,9 +150,7 @@ export class Layer3Browser {
     }
 
     const loginText = await this.page.locator('body').innerText().catch(() => '');
-    const loginUrl = this.page.url();
-    const looksLikeLogin = /login|sign-?in/i.test(loginUrl)
-      || /sign in|log in|login|email|password/i.test(loginText.slice(0, 1000));
+    const looksLikeLogin = await this.isLoginPage(loginText);
     if (!looksLikeLogin) return;
 
     this.logger.info('Refreshing Layer3 login session', {
@@ -212,6 +209,31 @@ export class Layer3Browser {
       await this.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
       await this.waitForConsoleLoaded();
     }
+  }
+
+  async isLoginPage(existingBodyText = '') {
+    const url = this.page.url();
+    if (/\/login(?:[/?#]|$)|\/sign-?in(?:[/?#]|$)/i.test(url)) return true;
+
+    const hasPassword = await this.hasVisibleMatchingInput([
+      'input[type="password"]',
+      'input[name*="password" i]',
+      'input[id*="password" i]',
+      'input[placeholder*="password" i]',
+    ]);
+    if (!hasPassword) return false;
+
+    const hasEmail = await this.hasVisibleMatchingInput([
+      'input[type="email"]',
+      'input[name*="email" i]',
+      'input[id*="email" i]',
+      'input[placeholder*="email" i]',
+      'input[type="text"]',
+    ]);
+    if (!hasEmail) return false;
+
+    const body = existingBodyText || await this.page.locator('body').innerText().catch(() => '');
+    return /sign in to layer3|forgot password|don't have an account|enter a valid email|invalid credentials/i.test(body);
   }
 
   async waitForLoginFormReady() {
