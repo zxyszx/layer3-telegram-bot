@@ -9,6 +9,10 @@ function sanitize(value) {
     .replace(/password["']?\s*:\s*["'][^"']+["']/gi, 'password":"[redacted]"'));
 }
 
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
 const baseConfig = loadConfig();
 const store = new JsonStateStore(baseConfig.botConfigPath);
 const botConfig = await store.read();
@@ -16,6 +20,10 @@ const config = applyBotConfig(baseConfig, botConfig);
 
 if (!config.email || !config.password) {
   throw new Error('还没有保存 Layer3 邮箱和密码。请先在 Telegram 发送 /bind 输入一次。');
+}
+
+if (!isValidEmail(config.email)) {
+  throw new Error('已保存的 Layer3 邮箱格式不正确。请在 Telegram 重新发送 /bind 输入邮箱。');
 }
 
 const logger = createLogger(config.logLevel);
