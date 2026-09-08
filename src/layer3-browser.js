@@ -11,6 +11,41 @@ const STATUS_PATTERNS = [
 
 export class LoginRequiredError extends Error {}
 
+export function buildInstanceUrl(consoleOrigin, projectSlug, instanceName) {
+  return `${consoleOrigin}/app/projects/${encodeURIComponent(projectSlug)}/${encodeURIComponent(instanceName)}/overview`;
+}
+
+function parseNgn(text, labelPattern) {
+  const match = text.match(new RegExp(`NGN\\s*([\\d,.]+)[\\s\\S]{0,80}?${labelPattern}`, 'i'))
+    || text.match(new RegExp(`${labelPattern}[\\s\\S]{0,80}?NGN\\s*([\\d,.]+)`, 'i'));
+  return match ? Number(match[1].replaceAll(',', '')) : null;
+}
+
+function parseInstanceCounts(text) {
+  const match = text.match(/(\d+)\s+Total\s+(\d+)\s+Running\s+(\d+)\s+Stopped\s+(\d+)\s+Error/i);
+  if (!match) return null;
+  return {
+    total: Number(match[1]),
+    running: Number(match[2]),
+    stopped: Number(match[3]),
+    error: Number(match[4]),
+  };
+}
+
+function parseRowDetails(text) {
+  const ip = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)?.[0] || '';
+  const cpu = text.match(/\b\d+\s+CORE\b/i)?.[0] || '';
+  const memoryStorage = [...text.matchAll(/(\d+(?:\.\d+)?)\s*\(GB\)/gi)].map((match) => `${match[1]} GB`);
+  const region = text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+Nigeria\b/)?.[0] || '';
+  return {
+    ip,
+    cpu,
+    ram: memoryStorage[0] || '',
+    storage: memoryStorage[1] || '',
+    region,
+  };
+}
+
 export class Layer3Browser {
   constructor(config, logger) {
     this.config = config;
@@ -77,7 +112,52 @@ export class Layer3Browser {
     return Number(match[1].replaceAll(',', ''));
   }
 
+  async listInstances() {
+    return this.serial(async () => {
+      await this.ensureReady(this.config.instancesUrl);
+      const body = await this.page.locator('body').innerText();
+      const balance = await this.readBalance().catch(() => null);
+      const counts = parseInstanceCounts(body);
+      const links = await this.page.locator('a[href*="/app/projects/"][href*="/overview"]').evaluateAll((anchors) => anchors.map((anchor) => {
+        const row = anchor.closest('[class]')?.parentElement?.innerText
+          || anchor.closest('tr')?.innerText
+          || anchor.parentElement?.innerText
+          || anchor.textContent
+          || '';
+        return {
+          href: anchor.href,
+          text: anchor.textContent || '',
+          row,
+        };
+      }));
+      const seen = new Set();
+      const instances = links.flatMap((link) => {
+        const match = link.href.match(/\/app\/projects\/([^/]+)\/(vm-[^/]+)\/overview/i);
+        if (!match || seen.has(link.href)) return [];
+        seen.add(link.href);
+        return [{
+          name: decodeURIComponent(match[2]),
+          projectSlug: decodeURIComponent(match[1]),
+          instanceUrl: link.href,
+          ...parseRowDetails(link.row),
+        }];
+      });
+
+      for (const instance of instances) {
+        await this.ensureReady(instance.instanceUrl);
+        const detailText = await this.page.locator('body').innerText();
+        instance.status = await this.readInstanceStatus();
+        instance.allTimeConsumption = parseNgn(detailText, 'All Time Consumption');
+      }
+
+      return { balance, counts, instances };
+    });
+  }
+
   async openInstance() {
+    if (!this.config.instanceUrl) {
+      throw new Error('Layer3 instance is not bound');
+    }
     await this.ensureReady(this.config.instanceUrl);
     const instance = this.page.getByText(this.config.instanceName, { exact: true }).first();
     if (!await instance.isVisible().catch(() => false)) {

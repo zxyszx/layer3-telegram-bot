@@ -71,12 +71,88 @@ async function promptBindingStep(chatId, session) {
   const prompts = {
     email: '请输入 Layer3 登录邮箱：',
     password: '请输入 Layer3 登录密码：\n提示：Telegram 聊天记录会保存这条消息，建议绑定完成后手动删除密码消息。',
+    instanceChoice: '请输入要绑定的机器编号：',
     projectSlug: '请输入 Layer3 项目标识，不是页面显示名。请打开机器详情页，从地址栏 /app/projects/<这里>/机器名/overview 复制，例如 default-828：',
     instanceName: '请输入 Layer3 机器实例名称，例如 vm-f9k5yf10c：',
     hourlyPrice: '请输入完整小时价格 NGN，例如 22.37702。发送“默认”使用 22.37702：',
     autoStopMinutes: '请输入“启动 1 小时”按钮的自动关机分钟数。发送“默认”使用 60：',
   };
   await telegram.send(chatId, prompts[session.step]);
+}
+
+function formatInstanceList(discovery) {
+  const balanceLine = discovery.balance == null
+    ? '账户余额：未能自动读取'
+    : `账户余额：NGN ${new Intl.NumberFormat('en-NG', { maximumFractionDigits: 2 }).format(discovery.balance)}`;
+  const countsLine = discovery.counts
+    ? `机器统计：${discovery.counts.total} 台，运行 ${discovery.counts.running}，停止 ${discovery.counts.stopped}，错误 ${discovery.counts.error}`
+    : `机器统计：读取到 ${discovery.instances.length} 台`;
+  const rows = discovery.instances.map((instance, index) => {
+    const details = [
+      instance.status,
+      instance.ip && `IP ${instance.ip}`,
+      instance.cpu,
+      instance.ram && `内存 ${instance.ram}`,
+      instance.storage && `硬盘 ${instance.storage}`,
+      instance.allTimeConsumption != null && `累计 NGN ${new Intl.NumberFormat('en-NG', { maximumFractionDigits: 2 }).format(instance.allTimeConsumption)}`,
+    ].filter(Boolean).join(' / ');
+    const project = instance.projectSlug ? `项目：${instance.projectSlug}` : '项目：未自动识别';
+    return `${index + 1}. ${instance.name}\n   ${project}${details ? `\n   ${details}` : ''}`;
+  });
+  return [
+    '已登录 Layer3，并读取到机器列表：',
+    balanceLine,
+    countsLine,
+    '',
+    ...rows,
+  ].join('\n');
+}
+
+function formatSelectedInstance(instance) {
+  return [
+    `已选择机器：${instance.name}`,
+    instance.projectSlug && `项目标识：${instance.projectSlug}`,
+    instance.status && `当前状态：${instance.status}`,
+    instance.ip && `公网 IP：${instance.ip}`,
+    instance.cpu && `CPU：${instance.cpu}`,
+    instance.ram && `内存：${instance.ram}`,
+    instance.storage && `硬盘：${instance.storage}`,
+    instance.allTimeConsumption != null && `累计消费：NGN ${new Intl.NumberFormat('en-NG', { maximumFractionDigits: 2 }).format(instance.allTimeConsumption)}`,
+  ].filter(Boolean).join('\n');
+}
+
+async function discoverInstancesForBinding(chatId, session) {
+  const temporaryConfig = applyBotConfig(baseConfig, {
+    ...botConfig,
+    allowedChatIds: [...config.allowedChatIds].length ? [...config.allowedChatIds] : [String(chatId)],
+    email: session.values.email,
+    passwordBase64: Buffer.from(session.values.password, 'utf8').toString('base64'),
+  });
+
+  layer3.config = temporaryConfig;
+  await telegram.send(chatId, '正在登录 Layer3 并读取账户余额和机器列表，请稍候...');
+  const discovery = await layer3.listInstances();
+  session.discovery = discovery;
+
+  if (discovery.instances.length === 0) {
+    await telegram.send(chatId, '没有自动读取到机器列表，请改为手动输入项目标识和机器名。');
+    session.step = 'projectSlug';
+    await promptBindingStep(chatId, session);
+    return;
+  }
+
+  await telegram.send(chatId, formatInstanceList(discovery));
+  if (discovery.instances.length === 1 && discovery.instances[0].projectSlug) {
+    session.values.instanceName = discovery.instances[0].name;
+    session.values.projectSlug = discovery.instances[0].projectSlug;
+    await telegram.send(chatId, formatSelectedInstance(discovery.instances[0]));
+    session.step = 'hourlyPrice';
+    await promptBindingStep(chatId, session);
+    return;
+  }
+
+  session.step = 'instanceChoice';
+  await promptBindingStep(chatId, session);
 }
 
 async function finishBinding(chatId, values) {
@@ -122,10 +198,27 @@ async function handleBindingMessage(chatId, text) {
     session.step = 'password';
   } else if (session.step === 'password') {
     session.values.password = value;
-    session.step = 'projectSlug';
+    await discoverInstancesForBinding(chatId, session);
+    return true;
+  } else if (session.step === 'instanceChoice') {
+    const choice = Number(value);
+    const instance = Number.isInteger(choice) ? session.discovery?.instances[choice - 1] : null;
+    if (!instance) {
+      await telegram.send(chatId, '机器编号无效，请重新输入列表中的编号。');
+      return true;
+    }
+    session.values.instanceName = instance.name;
+    if (!instance.projectSlug) {
+      await telegram.send(chatId, `${formatSelectedInstance(instance)}\n\n没有自动识别项目标识，需要手动输入一次。`);
+      session.step = 'projectSlug';
+    } else {
+      session.values.projectSlug = instance.projectSlug;
+      await telegram.send(chatId, formatSelectedInstance(instance));
+      session.step = 'hourlyPrice';
+    }
   } else if (session.step === 'projectSlug') {
     session.values.projectSlug = value;
-    session.step = 'instanceName';
+    session.step = session.values.instanceName ? 'hourlyPrice' : 'instanceName';
   } else if (session.step === 'instanceName') {
     session.values.instanceName = value;
     session.step = 'hourlyPrice';
@@ -197,7 +290,11 @@ async function handleUpdate(update) {
       }
     } else if (command === '/bind') {
       startBinding(chatId);
-      await promptBindingStep(chatId, bindingSessions.get(String(chatId)));
+      if (text.trim().split(/\s+/).length > 1) {
+        await handleBindingMessage(chatId, text);
+      } else {
+        await promptBindingStep(chatId, bindingSessions.get(String(chatId)));
+      }
     } else if (command === '/status') {
       await sendStatus(chatId);
     } else if (command === '/startvm') {
