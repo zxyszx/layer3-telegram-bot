@@ -69,6 +69,14 @@ export class Layer3Browser {
       headless: this.config.headless,
       viewport: { width: 1440, height: 1000 },
       locale: 'en-US',
+      timezoneId: 'Asia/Shanghai',
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+      ignoreHTTPSErrors: true,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+        '--no-sandbox',
+      ],
     });
     this.page = this.context.pages()[0] || await this.context.newPage();
   }
@@ -107,6 +115,9 @@ export class Layer3Browser {
     }
     if (/captcha|verify|verification|two-factor|2fa|otp|code/i.test(combined)) {
       return 'Layer3 自动登录失败：页面要求验证码或二次验证，需要先人工通过验证后再绑定。';
+    }
+    if (/login form did not render/i.test(combined)) {
+      return 'Layer3 自动登录失败：服务器浏览器打开登录页后没有渲染出邮箱/密码输入框。请运行 ngn diagnostics 查看页面摘要。';
     }
     if (this.lastLoginResult?.status) {
       return `Layer3 自动登录失败：登录接口返回 HTTP ${this.lastLoginResult.status}。请运行 ngn diagnostics 查看接口返回内容。`;
@@ -150,6 +161,15 @@ export class Layer3Browser {
       hasPassword: Boolean(this.config.password),
     });
 
+    if (!await this.waitForLoginFormReady()) {
+      this.logger.warn('Layer3 login page did not render usable inputs', {
+        url: this.page.url(),
+        title: await this.page.title().catch(() => ''),
+        body: loginText.slice(0, 300),
+      });
+      return;
+    }
+
     const emailFilled = await this.fillFirstMatchingInput([
       'input[type="email"]',
       'input[name*="email" i]',
@@ -192,6 +212,44 @@ export class Layer3Browser {
       await this.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
       await this.waitForConsoleLoaded();
     }
+  }
+
+  async waitForLoginFormReady() {
+    const selector = [
+      'input[type="email"]',
+      'input[type="password"]',
+      'input[name*="email" i]',
+      'input[name*="password" i]',
+      'input[placeholder*="email" i]',
+      'input[placeholder*="password" i]',
+      'input[type="text"]',
+    ].join(', ');
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const ready = await this.page.locator(selector).first().waitFor({
+        state: 'visible',
+        timeout: attempt === 0 ? 18_000 : 25_000,
+      }).then(() => true).catch(() => false);
+      if (ready) return true;
+
+      const text = await this.page.locator('body').innerText().catch(() => '');
+      const inputCount = await this.page.locator('input').count().catch(() => 0);
+      if (inputCount > 0 || !/^login\s*$/i.test(text.trim())) break;
+      await this.page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      await this.page.waitForTimeout(2500);
+    }
+
+    const rendered = await this.page.locator(selector).first().isVisible().catch(() => false);
+    if (!rendered) {
+      this.lastLoginResult = {
+        at: new Date().toISOString(),
+        status: null,
+        url: this.page.url(),
+        body: 'Login form did not render any visible email/password inputs in the server browser.',
+      };
+      await this.saveLoginResult();
+    }
+    return rendered;
   }
 
   async captureLoginResponse(response) {
