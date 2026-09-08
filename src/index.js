@@ -64,7 +64,7 @@ function startBinding(chatId) {
   bindingSessions.set(String(chatId), {
     step: 'email',
     values: {
-      email: config.email || '',
+      email: isValidEmail(config.email) ? config.email : '',
       password: config.password || '',
     },
   });
@@ -87,6 +87,14 @@ async function promptBindingStep(chatId, session) {
 
 function isDefaultInput(value) {
   return ['默认', 'default', 'd'].includes(value.toLowerCase());
+}
+
+function normalizeEmailInput(value) {
+  return value.trim().replace(/\\@/g, '@').replace(/\s+/g, '');
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
 }
 
 function formatInstanceList(discovery) {
@@ -238,10 +246,15 @@ async function handleBindingMessage(chatId, text) {
   if (!session) return false;
 
   let value = text.trim();
+  const command = value.split(/\s+/)[0].toLowerCase();
   if (value.toLowerCase() === '/cancel') {
     bindingSessions.delete(String(chatId));
     await telegram.send(chatId, '绑定流程已取消。', mainKeyboard);
     return true;
+  }
+  if (command.startsWith('/') && command !== '/bind') {
+    bindingSessions.delete(String(chatId));
+    return false;
   }
   if (session.step === 'email') {
     value = value.replace(/^\/bind(@\w+)?\s+/i, '').trim();
@@ -255,10 +268,15 @@ async function handleBindingMessage(chatId, text) {
   if (session.step === 'email') {
     if (isDefaultInput(value)) {
       if (!session.values.email) {
-        await telegram.send(chatId, '还没有保存过 Layer3 邮箱，请输入邮箱。');
+        await telegram.send(chatId, '还没有保存过有效 Layer3 邮箱，请输入邮箱。');
         return true;
       }
       value = session.values.email;
+    }
+    value = normalizeEmailInput(value);
+    if (!isValidEmail(value)) {
+      await telegram.send(chatId, '邮箱格式不正确，请重新输入 Layer3 登录邮箱。');
+      return true;
     }
     session.values.email = value;
     session.step = 'password';
