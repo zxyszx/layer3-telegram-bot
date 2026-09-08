@@ -83,6 +83,7 @@ ngn
 - 测试 Telegram Bot Token
 - 重置 Telegram 和 Layer3 绑定
 - 登录失败诊断
+- 测试 Layer3 自动登录和机器读取
 - 卸载容器
 
 也可以直接运行：
@@ -95,6 +96,7 @@ ngn
 ./scripts/setup.sh update
 ./scripts/setup.sh status
 ./scripts/setup.sh diagnostics
+./scripts/setup.sh layer3-test
 ./scripts/setup.sh reset-binding
 ```
 
@@ -126,6 +128,12 @@ ngn diagnostics
 ```
 
 诊断命令会显示当前版本、容器状态、最近日志、登录接口返回状态和登录页面摘要，方便确认到底是密码错误、验证码还是页面变化。
+
+也可以在服务器直接测试 Layer3 自动登录和机器读取：
+
+```bash
+ngn layer3-test
+```
 
 绑定信息会保存在服务器本地 `data/bot-config.json`。该文件包含敏感信息，已经被 `.gitignore` 和 `.dockerignore` 排除，不能上传到 GitHub。
 

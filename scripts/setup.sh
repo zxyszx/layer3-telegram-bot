@@ -202,6 +202,12 @@ diagnostics() {
   fi
 }
 
+layer3_test() {
+  check_docker
+  fix_data_permissions
+  docker compose exec -T "${SERVICE_NAME}" node scripts/layer3-check.js
+}
+
 reset_binding() {
   read -r -p "确认删除 Telegram 管理员、Layer3 绑定信息和自动关机计划？输入 y 确认: " answer
   if [[ "${answer}" != "y" && "${answer}" != "Y" ]]; then
@@ -248,7 +254,8 @@ Layer3 Telegram Bot 一键管理菜单
 8. 测试 Telegram Bot Token
 9. 重置 Telegram 和 Layer3 绑定
 10. 登录失败诊断
-11. 卸载容器（保留配置和数据）
+11. 测试 Layer3 自动登录和机器读取
+12. 卸载容器（保留配置和数据）
 0. 退出
 EOF
     printf '\n'
@@ -264,7 +271,8 @@ EOF
       8) test_token || true; pause ;;
       9) reset_binding || true; pause ;;
       10) diagnostics || true; pause ;;
-      11) uninstall_bot || true; pause ;;
+      11) layer3_test || true; pause ;;
+      12) uninstall_bot || true; pause ;;
       0) exit 0 ;;
       *) red "无效选择"; pause ;;
     esac
@@ -280,6 +288,7 @@ case "${1:-}" in
   --update|update) update_project ;;
   --status|status) show_status ;;
   --diagnostics|diagnostics) diagnostics ;;
+  --layer3-test|layer3-test) layer3_test ;;
   --reset-binding|reset-binding) reset_binding ;;
   *) menu ;;
 esac
