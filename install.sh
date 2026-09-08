@@ -85,15 +85,27 @@ sync_repo() {
   fi
 }
 
+install_shortcut() {
+  local shortcut="/usr/local/bin/ngn"
+  run_as_root tee "${shortcut}" >/dev/null <<EOF
+#!/usr/bin/env bash
+cd "${INSTALL_DIR}" || exit 1
+exec ./scripts/setup.sh "\$@"
+EOF
+  run_as_root chmod +x "${shortcut}"
+  green "快捷命令已安装：ngn"
+}
+
 main() {
   install_git
   install_docker_prompt
   sync_repo
 
   chmod +x "${INSTALL_DIR}"/scripts/*.sh
+  install_shortcut
   green "安装文件已准备好。"
   cd "${INSTALL_DIR}"
-  exec ./scripts/setup.sh install </dev/tty
+  exec ./scripts/setup.sh </dev/tty
 }
 
 main "$@"

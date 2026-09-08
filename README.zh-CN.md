@@ -21,6 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/zxyszx/layer3-telegram-bot/main/ins
 ```
 
 脚本会自动拉取项目到 `/opt/layer3-telegram-bot`，然后打开安装菜单。菜单中只需要输入 Telegram Bot Token。
+安装完成后，以后在服务器任意目录输入 `ngn` 即可重新打开管理菜单。
 
 也可以手动安装：
 
@@ -43,6 +44,12 @@ chmod +x scripts/*.sh
 
 ```bash
 ./scripts/setup.sh
+```
+
+如果使用一键命令安装，也可以直接输入：
+
+```bash
+ngn
 ```
 
 - `1` 安装 / 修改 Telegram Bot Token

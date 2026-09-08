@@ -191,6 +191,7 @@ menu() {
     clear || true
     cat <<'EOF'
 Layer3 Telegram Bot 一键管理菜单
+快捷命令：ngn
 
 1. 安装 / 修改 Telegram Bot Token
 2. 启动机器人
