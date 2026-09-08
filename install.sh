@@ -44,7 +44,7 @@ install_docker_prompt() {
   fi
 
   yellow "未检测到 Docker 或 Docker Compose 插件。"
-  read -r -p "是否使用 Docker 官方脚本自动安装？输入 y 确认: " answer
+  read -r -p "是否使用 Docker 官方脚本自动安装？输入 y 确认: " answer </dev/tty
   if [[ "${answer}" != "y" && "${answer}" != "Y" ]]; then
     cat <<'EOF'
 
@@ -93,7 +93,7 @@ main() {
   chmod +x "${INSTALL_DIR}"/scripts/*.sh
   green "安装文件已准备好。"
   cd "${INSTALL_DIR}"
-  exec ./scripts/setup.sh install
+  exec ./scripts/setup.sh install </dev/tty
 }
 
 main "$@"
