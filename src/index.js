@@ -131,7 +131,22 @@ async function discoverInstancesForBinding(chatId, session) {
 
   layer3.config = temporaryConfig;
   await telegram.send(chatId, '正在登录 Layer3 并读取账户余额和机器列表，请稍候...');
-  const discovery = await layer3.listInstances();
+  let discovery;
+  try {
+    discovery = await layer3.listInstances();
+  } catch (error) {
+    logger.warn('Layer3 discovery failed during binding; falling back to manual instance input', {
+      error: error.message,
+    });
+    await telegram.send(chatId, [
+      `自动读取机器列表失败：${error.message}`,
+      '',
+      '账号和密码已临时记住，本次不用重新输入。请手动输入项目标识和机器名完成绑定。',
+    ].join('\n'));
+    session.step = 'projectSlug';
+    await promptBindingStep(chatId, session);
+    return;
+  }
   session.discovery = discovery;
 
   if (discovery.instances.length === 0) {
@@ -170,8 +185,17 @@ async function finishBinding(chatId, values) {
   await saveBotConfig(nextConfig);
   bindingSessions.delete(String(chatId));
   await telegram.send(chatId, '绑定信息已保存。正在自动检查 Layer3 机器状态，请稍候...');
-  await sendStatus(chatId);
-  await telegram.send(chatId, '检查完成。现在可以使用下方按钮或命令启动、启动 1 小时、关机。', mainKeyboard);
+  try {
+    await sendStatus(chatId);
+    await telegram.send(chatId, '检查完成。现在可以使用下方按钮或命令启动、启动 1 小时、关机。', mainKeyboard);
+  } catch (error) {
+    logger.warn('Layer3 status check failed after saving binding', { error: error.message });
+    await telegram.send(chatId, [
+      `绑定已保存，但自动检查暂时失败：${error.message}`,
+      '',
+      '后续不用重新输入账号密码。请稍后发送 /status 重试，或在服务器运行 ngn 查看日志。',
+    ].join('\n'), mainKeyboard);
+  }
 }
 
 async function handleBindingMessage(chatId, text) {
