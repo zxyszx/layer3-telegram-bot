@@ -63,14 +63,23 @@ async function bindFirstChat(chatId) {
 function startBinding(chatId) {
   bindingSessions.set(String(chatId), {
     step: 'email',
-    values: {},
+    values: {
+      email: config.email || '',
+      password: config.password || '',
+    },
   });
 }
 
 async function promptBindingStep(chatId, session) {
+  const hasSavedEmail = Boolean(config.email || session.values.email);
+  const hasSavedPassword = Boolean(config.password || session.values.password);
   const prompts = {
-    email: '请输入 Layer3 登录邮箱：',
-    password: '请输入 Layer3 登录密码：\n提示：Telegram 聊天记录会保存这条消息，建议绑定完成后手动删除密码消息。',
+    email: hasSavedEmail
+      ? `请输入 Layer3 登录邮箱，或发送“默认”继续使用已保存邮箱：${config.email || session.values.email}`
+      : '请输入 Layer3 登录邮箱：',
+    password: hasSavedPassword
+      ? '请输入 Layer3 登录密码，或发送“默认”继续使用已保存密码：'
+      : '请输入 Layer3 登录密码：\n提示：Telegram 聊天记录会保存这条消息，建议绑定完成后手动删除密码消息。',
     instanceChoice: '请输入要绑定的机器编号：',
     projectSlug: '请输入 Layer3 项目标识，不是页面显示名。请打开机器详情页，从地址栏 /app/projects/项目标识/机器名/overview 复制，例如 default-828：',
     instanceName: '请输入 Layer3 机器实例名称，例如 vm-f9k5yf10c：',
@@ -78,6 +87,10 @@ async function promptBindingStep(chatId, session) {
     autoStopMinutes: '请输入“启动 1 小时”按钮的自动关机分钟数。发送“默认”使用 60：',
   };
   await telegram.send(chatId, prompts[session.step]);
+}
+
+function isDefaultInput(value) {
+  return ['默认', 'default', 'd'].includes(value.toLowerCase());
 }
 
 function formatInstanceList(discovery) {
@@ -170,6 +183,15 @@ async function discoverInstancesForBinding(chatId, session) {
   await promptBindingStep(chatId, session);
 }
 
+async function savePartialCredentials(chatId, values) {
+  await saveBotConfig({
+    ...botConfig,
+    allowedChatIds: [...config.allowedChatIds].length ? [...config.allowedChatIds] : [String(chatId)],
+    email: values.email,
+    passwordBase64: Buffer.from(values.password, 'utf8').toString('base64'),
+  });
+}
+
 async function finishBinding(chatId, values) {
   const nextConfig = {
     ...botConfig,
@@ -218,10 +240,25 @@ async function handleBindingMessage(chatId, text) {
   }
 
   if (session.step === 'email') {
+    if (isDefaultInput(value)) {
+      if (!session.values.email) {
+        await telegram.send(chatId, '还没有保存过 Layer3 邮箱，请输入邮箱。');
+        return true;
+      }
+      value = session.values.email;
+    }
     session.values.email = value;
     session.step = 'password';
   } else if (session.step === 'password') {
+    if (isDefaultInput(value)) {
+      if (!session.values.password) {
+        await telegram.send(chatId, '还没有保存过 Layer3 密码，请输入密码。');
+        return true;
+      }
+      value = session.values.password;
+    }
     session.values.password = value;
+    await savePartialCredentials(chatId, session.values);
     await discoverInstancesForBinding(chatId, session);
     return true;
   } else if (session.step === 'instanceChoice') {
@@ -247,7 +284,7 @@ async function handleBindingMessage(chatId, text) {
     session.values.instanceName = value;
     session.step = 'hourlyPrice';
   } else if (session.step === 'hourlyPrice') {
-    const hourlyPrice = ['默认', 'default', 'd'].includes(value.toLowerCase()) ? 22.37702 : Number(value);
+    const hourlyPrice = isDefaultInput(value) ? 22.37702 : Number(value);
     if (!Number.isFinite(hourlyPrice) || hourlyPrice <= 0) {
       await telegram.send(chatId, '小时价格必须是大于 0 的数字，或发送“默认”。请重新输入。');
       return true;
@@ -255,7 +292,7 @@ async function handleBindingMessage(chatId, text) {
     session.values.hourlyPrice = hourlyPrice;
     session.step = 'autoStopMinutes';
   } else if (session.step === 'autoStopMinutes') {
-    const autoStopMinutes = ['默认', 'default', 'd'].includes(value.toLowerCase()) ? 60 : Number(value);
+    const autoStopMinutes = isDefaultInput(value) ? 60 : Number(value);
     if (!Number.isFinite(autoStopMinutes) || autoStopMinutes <= 0) {
       await telegram.send(chatId, '自动关机分钟数必须是大于 0 的数字，或发送“默认”。请重新输入。');
       return true;
