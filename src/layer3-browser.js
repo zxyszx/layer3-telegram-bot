@@ -547,6 +547,12 @@ export class Layer3Browser {
     });
   }
 
+  currentInstanceFromApi() {
+    return this.instancesFromApi().find((instance) => (
+      instance.name.toLowerCase() === this.config.instanceName.toLowerCase()
+    )) || null;
+  }
+
   async waitForApiInstances() {
     const deadline = Date.now() + 18_000;
     while (Date.now() < deadline) {
@@ -614,13 +620,19 @@ export class Layer3Browser {
       throw new Error('Layer3 instance is not bound');
     }
     await this.ensureReady(this.config.instanceUrl);
-    const instance = this.page.getByText(this.config.instanceName, { exact: true }).first();
-    if (!await instance.isVisible().catch(() => false)) {
+    const apiInstance = this.currentInstanceFromApi();
+    if (apiInstance) return;
+
+    const body = await this.page.locator('body').innerText().catch(() => '');
+    if (!body || /not found|404|does not exist/i.test(body.slice(0, 1000))) {
       throw new Error(`Instance not found: ${this.config.instanceName}`);
     }
   }
 
   async readInstanceStatus() {
+    const apiInstance = this.currentInstanceFromApi();
+    if (apiInstance?.status) return apiInstance.status;
+
     const body = await this.page.locator('body').innerText();
     const explicit = body.match(/Status:\s*(Running|Active|Stopped|Starting|Booting|Stopping|Shutting down|Suspended|Paused|Shelved)/i);
     if (explicit) {
