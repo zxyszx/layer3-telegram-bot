@@ -75,7 +75,7 @@ async function promptBindingStep(chatId, session) {
   const hasSavedPassword = Boolean(config.password || session.values.password);
   const prompts = {
     email: hasSavedEmail
-      ? `请输入 Layer3 登录邮箱，或发送“默认”继续使用已保存邮箱：${config.email || session.values.email}`
+      ? '请输入 Layer3 登录邮箱，或发送“默认”继续使用已保存邮箱。'
       : '请输入 Layer3 登录邮箱：',
     password: hasSavedPassword
       ? '请输入 Layer3 登录密码，或发送“默认”继续使用已保存密码：'
