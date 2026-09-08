@@ -1,87 +1,136 @@
 # Layer3 Telegram Bot
 
-使用 Telegram 查询 Layer3 Cloud 余额、实例状态和预计可用时间，并控制指定虚拟机：
+一个通过 Telegram 控制 Layer3 Cloud 虚拟机的 Docker 机器人。
 
-- **启动**：持续运行，取消旧的自动关机任务。
-- **启动 1 小时**：启动并在 60 分钟后执行控制台 `Power Off`。
-- **立即关机**：二次确认后执行控制台 `Power Off`。
-- **查看状态**：显示余额、运行状态、剩余小时和按每天 1 小时估算的天数。
+服务器安装时只需要输入 **Telegram Bot Token**。首次启动后，在 Telegram 私聊机器人发送 `/start` 自动绑定管理员，再发送 `/bind` 输入 Layer3 账号、密码、项目和机器名。机器人会自动检查机器状态，确认成功后即可在 Telegram 里启动、启动 1 小时后自动关机、立即关机和查看余额状态。
 
-当前已适配实例：`default-828 / vm-f9k5yf10c`，参考价格 `NGN 22.37702/小时`。
+> 机器人必须部署在另一台长期在线的 VPS、NAS 或家庭服务器上，不能部署在它要控制的 Layer3 虚拟机中。否则目标机器关机后，机器人也会离线，无法再远程启动目标机器。
 
-## 部署位置
+## 功能
 
-机器人必须部署在另一台长期在线的 VPS、NAS 或家庭服务器上，不能安装在它要控制的 Layer3 虚拟机中，否则目标机器关机后机器人也会离线。
+- `/start`：首次绑定管理员，显示操作菜单
+- `/bind`：在 Telegram 里绑定或重新绑定 Layer3 账号和机器
+- `/status`：查看余额、机器状态、预计可运行小时/天数
+- `/startvm`：二次确认后持续启动机器，并取消旧的自动关机任务
+- `/start1h`：二次确认后启动机器，并在设定分钟数后自动关机
+- `/stopvm`：二次确认后执行控制台 `Power Off`
+- 自动保存 Telegram 更新进度，避免进程重启后重复执行付费操作
+- 自动关机任务持久化，容器重启后继续生效
 
-## 一键 Docker 部署
+## 一键 Docker 安装
 
-服务器需要预先安装 Docker Engine、Docker Compose 插件和 Git：
+服务器需要先安装 Docker Engine 和 Docker Compose 插件。
 
 ```bash
-gh auth login
-gh repo clone zxyszx/layer3-telegram-bot
+git clone https://github.com/zxyszx/layer3-telegram-bot.git
 cd layer3-telegram-bot
+chmod +x scripts/*.sh
 ./scripts/setup.sh
 ```
 
-仓库是私有的，因此服务器需要先安装并登录 GitHub CLI。完成过 `gh auth login` 后，以后更新不需要重新登录。
+进入菜单后选择：
 
-已登录 GitHub 的服务器可以直接运行一条命令：
-
-```bash
-gh repo clone zxyszx/layer3-telegram-bot && cd layer3-telegram-bot && ./scripts/setup.sh
+```text
+1. 安装 / 修改 Telegram Bot Token
 ```
 
-脚本会询问 Telegram Token、Chat ID、Layer3 邮箱和密码，然后构建并启动容器。
+脚本只会要求输入 Telegram Bot Token，然后自动构建并启动 Docker 容器。
 
-常用命令：
+启动后打开 Telegram：
+
+1. 私聊你的机器人，发送 `/start`
+2. 当前 Telegram Chat ID 会自动成为管理员
+3. 发送 `/bind`
+4. 按提示输入 Layer3 登录邮箱、密码、项目标识、实例名称、小时价格和自动关机分钟数
+5. 机器人自动检查机器状态，成功返回状态后即可操作
+
+## 菜单命令
+
+```bash
+./scripts/setup.sh
+```
+
+菜单包含：
+
+- 安装 / 修改 Telegram Bot Token
+- 启动机器人
+- 停止机器人
+- 重启机器人
+- 查看实时日志
+- 更新代码并重启
+- 查看容器状态和最近日志
+- 测试 Telegram Bot Token
+- 重置 Telegram 和 Layer3 绑定
+- 卸载容器
+
+也可以直接运行：
+
+```bash
+./scripts/setup.sh start
+./scripts/setup.sh stop
+./scripts/setup.sh restart
+./scripts/setup.sh logs
+./scripts/setup.sh update
+./scripts/setup.sh status
+./scripts/setup.sh reset-binding
+```
+
+## Telegram Bot Token 获取
+
+1. 在 Telegram 打开 `@BotFather`
+2. 发送 `/newbot`
+3. 按提示创建机器人
+4. 复制 BotFather 返回的 Token
+5. 在服务器菜单里填入这个 Token
+
+不需要在服务器手动填写 Telegram Chat ID。首次私聊机器人发送 `/start` 的用户会自动成为管理员；为了避免误绑定，首次管理员绑定不接受群组消息。
+
+## Layer3 绑定说明
+
+在 Telegram 里发送 `/bind` 后依次输入：
+
+- Layer3 登录邮箱
+- Layer3 登录密码
+- Layer3 项目标识，例如 `default-828`
+- Layer3 实例名称，例如 `vm-f9k5yf10c`
+- 完整小时价格 NGN，例如 `22.37702`；发送 `默认` 使用 `22.37702`
+- 自动关机分钟数；发送 `默认` 使用 `60`
+
+绑定信息会保存在服务器本地 `data/bot-config.json`。该文件包含敏感信息，已经被 `.gitignore` 和 `.dockerignore` 排除，不能上传到 GitHub。
+
+如果绑定错了，可以在服务器运行：
+
+```bash
+./scripts/setup.sh reset-binding
+./scripts/setup.sh restart
+```
+
+然后重新在 Telegram 里发送 `/start` 和 `/bind`。
+
+## 常用 Docker 命令
 
 ```bash
 ./scripts/start.sh   # 构建并启动
 ./scripts/logs.sh    # 查看日志
 ./scripts/stop.sh    # 停止机器人容器，不操作 Layer3 VM
-./scripts/update.sh  # 拉取仓库更新并重新构建
+./scripts/update.sh  # 拉取更新并重新构建
 ```
-
-## 在哪里填写账号密码
-
-推荐直接运行 `./scripts/setup.sh`，密码输入时不会显示。脚本将配置写入项目根目录的 `.env`：
-
-```dotenv
-LAYER3_EMAIL=你的登录邮箱
-LAYER3_PASSWORD_BASE64=脚本自动生成的Base64密码
-```
-
-也可以复制 `.env.example` 后手动填写 `LAYER3_PASSWORD`。`.env` 权限应为 `600`，已经在 `.gitignore` 和 `.dockerignore` 中排除，绝不能提交到 GitHub。
-
-首次登录遇到验证码或二次验证时，需在带桌面的服务器上运行 `npm run login` 保存浏览器会话；详细步骤和安全说明见 [完整中文部署文档](README.zh-CN.md)。
-
-## Telegram 准备
-
-1. 联系 Telegram 的 `@BotFather`，使用 `/newbot` 创建机器人并取得 Token。
-2. 向新机器人发送一条消息。
-3. 打开 `https://api.telegram.org/bot<你的Token>/getUpdates`，从 `message.chat.id` 取得 Chat ID。
-4. 运行 `./scripts/setup.sh` 填入 Token 和 Chat ID。
-
-## Docker 镜像
-
-仓库包含 `Dockerfile` 和 `docker-compose.yml`。GitHub Actions 会运行测试，并在推送到 `main` 或创建版本标签时构建镜像到：
-
-`ghcr.io/<GitHub用户名>/<仓库名>:latest`
 
 ## 安全说明
 
-- Telegram 操作仅接受 `TELEGRAM_ALLOWED_CHAT_IDS` 白名单。
-- 付费启动和 Power Off 均要求二次确认。
-- Telegram 更新编号和自动关机任务均持久化，进程重启不会重复执行付费操作或丢失关机任务。
-- Layer3 当前页面提供的是 `Power Off`，可能是强制断电；执行前必须保存数据并正常停止应用。
-- 真实费用以 Layer3 账单为准。
+- 首次 `/start` 的 Telegram 用户会成为管理员，请先确认 Bot Token 没有泄露
+- 启动和关机都需要 Telegram 二次确认
+- Telegram 中输入 Layer3 密码后，建议手动删除那条密码消息
+- Layer3 当前页面提供的是 `Power Off`，可能是强制断电，关机前请先保存数据
+- 真实费用以 Layer3 账单为准，README 中的价格只用于估算
 
-## 验证
+## 本地开发
+
+需要 Node.js 20 或更高版本：
 
 ```bash
 npm ci
+npx playwright install chromium
 npm test
+npm start
 ```
-
-首次上线建议把 `AUTO_STOP_MINUTES` 改为 `5`，使用无重要数据的实例完成一次启动/停止测试，再改回 `60`。

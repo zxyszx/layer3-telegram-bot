@@ -1,7 +1,6 @@
 {
   "name": "layer3-telegram-bot",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "description": "Telegram control bot for a Layer3 Cloud virtual machine",
   "scripts": {

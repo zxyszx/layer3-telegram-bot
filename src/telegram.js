@@ -37,6 +37,14 @@ export class TelegramBot {
     return this.allowedChatIds.has(String(chatId));
   }
 
+  hasAllowedChats() {
+    return this.allowedChatIds.size > 0;
+  }
+
+  setAllowedChatIds(chatIds) {
+    this.allowedChatIds = new Set([...chatIds].map(String));
+  }
+
   setHandler(handler) {
     this.handler = handler;
   }
